@@ -1,3 +1,9 @@
 #!/command/with-contenv sh
+
+install -d -o ubuntu -g ubuntu -m 0755 /home/ubuntu/.claude
 install -d -o ubuntu -g ubuntu -m 0755 /run/tailscale
 install -d -o ubuntu -g ubuntu -m 0755 /workspace
+
+[ -e /home/ubuntu/.claude/.claude.json ] || install -o ubuntu -g ubuntu -m 0644 /dev/null /home/ubuntu/.claude/.claude.json
+ln -sf /home/ubuntu/.claude/.claude.json /home/ubuntu/.claude.json
+chown -h ubuntu:ubuntu /home/ubuntu/.claude.json
