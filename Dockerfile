@@ -1,0 +1,348 @@
+ARG UBUNTU_VERSION=26.04
+
+FROM ubuntu:${UBUNTU_VERSION} AS devcontainers
+
+ARG DEVCONTAINERS_REF=main
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN git clone \
+    --depth=1 \
+    --branch="${DEVCONTAINERS_REF}" \
+    https://github.com/progamesigner/devcontainers.git /tmp/devcontainers
+
+FROM ubuntu:${UBUNTU_VERSION} AS fetcher
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+FROM fetcher AS s6
+
+ARG TARGETARCH
+
+ARG S6_OVERLAY_VERSION=3.2.1.0
+
+RUN case "${TARGETARCH}" in \
+        amd64) S6_ARCH=x86_64 ;; \
+        arm64) S6_ARCH=aarch64 ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2 ; exit 1 ;; \
+    esac \
+ && mkdir -p /opt/s6 \
+ && curl -fsSL -o /tmp/s6-noarch.tar.xz https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz \
+ && curl -fsSL -o /tmp/s6-arch.tar.xz https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_ARCH}.tar.xz \
+ && tar -C /opt/s6 -Jxpf /tmp/s6-noarch.tar.xz \
+ && tar -C /opt/s6 -Jxpf /tmp/s6-arch.tar.xz \
+ && rm -f /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz
+
+FROM fetcher AS tailscale
+
+ARG TARGETARCH
+
+ARG TAILSCALE_VERSION=1.102.3
+
+RUN mkdir -p /opt/tailscale/usr/local/bin \
+ && curl -fsSL -o /tmp/tailscale.tgz https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}.tgz \
+ && tar -C /tmp -xzf /tmp/tailscale.tgz --strip-components=1 tailscale_${TAILSCALE_VERSION}_${TARGETARCH}/tailscale tailscale_${TAILSCALE_VERSION}_${TARGETARCH}/tailscaled \
+ && install -m 0755 /tmp/tailscale /tmp/tailscaled /opt/tailscale/usr/local/bin/ \
+ && rm -f /tmp/tailscale.tgz /tmp/tailscale /tmp/tailscaled
+
+FROM fetcher AS vscode
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        amd64) CODE_ARCH=x64 ;; \
+        arm64) CODE_ARCH=arm64 ;; \
+    esac \
+ && mkdir -p /opt/vscode/usr/local/bin \
+ && curl -fsSL -o /tmp/code.tgz https://update.code.visualstudio.com/latest/cli-linux-${CODE_ARCH}/stable \
+ && tar -C /opt/vscode/usr/local/bin -xzf /tmp/code.tgz \
+ && rm -f /tmp/code.tgz
+
+FROM ubuntu:${UBUNTU_VERSION} AS herdr
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG HERDR_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/features/herdr
+
+RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS moshi
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG MOSHI_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/features/moshi
+
+RUN VERSION="${MOSHI_VERSION}" BRIDGE=false CLIPBOARD=false bash /tmp/devcontainers/features/moshi/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS lang-bun
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG BUN_VERSION=1.4.2
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/bun /tmp/devcontainers/features/bun
+
+RUN VERSION="${BUN_VERSION}" bash /tmp/devcontainers/features/bun/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS lang-deno
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG DENO_VERSION=2.9.5
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/deno /tmp/devcontainers/features/deno
+
+RUN VERSION="${DENO_VERSION}" bash /tmp/devcontainers/features/deno/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS lang-go
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG GO_VERSION=1.27.1
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/go /tmp/devcontainers/features/go
+
+RUN VERSION="${GO_VERSION}" bash /tmp/devcontainers/features/go/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS lang-node
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG NODE_VERSION=24.20.0
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/node /tmp/devcontainers/features/node
+
+RUN VERSION="${NODE_VERSION}" bash /tmp/devcontainers/features/node/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS lang-php
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG PHP_VERSION=8.5.9
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/php /tmp/devcontainers/features/php
+
+RUN sed -i \
+        -e '/--disable-phar/d' \
+        -e 's/docker-php-ext-install gd phar/docker-php-ext-install gd/' \
+        -e 's/docker-php-ext-enable opcache sodium/docker-php-ext-enable sodium/' \
+        /tmp/devcontainers/features/php/install.sh
+
+RUN VERSION="${PHP_VERSION}" bash /tmp/devcontainers/features/php/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS lang-python
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG PYTHON_VERSION=3.14.7
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/python /tmp/devcontainers/features/python
+
+RUN VERSION="${PYTHON_VERSION}" bash /tmp/devcontainers/features/python/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS lang-rust
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG RUST_VERSION=1.98.1
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/rust /tmp/devcontainers/features/rust
+
+RUN VERSION="${RUST_VERSION}" bash /tmp/devcontainers/features/rust/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS agent-antigravity-cli
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG ANTIGRAVITY_CLI_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/antigravity-cli /tmp/devcontainers/features/antigravity-cli
+
+RUN VERSION="${ANTIGRAVITY_CLI_VERSION}" bash /tmp/devcontainers/features/antigravity-cli/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS agent-copilot
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG COPILOT_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/copilot-cli /tmp/devcontainers/features/copilot-cli
+
+RUN VERSION="${COPILOT_VERSION}" bash /tmp/devcontainers/features/copilot-cli/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS agent-opencode
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG OPENCODE_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/opencode /tmp/devcontainers/features/opencode
+
+RUN VERSION="${OPENCODE_VERSION}" bash /tmp/devcontainers/features/opencode/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS agent-claude-code
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=lang-node /usr/local/ /usr/local/
+COPY --from=devcontainers /tmp/devcontainers/features/claude-code /tmp/devcontainers/features/claude-code
+
+RUN bash /tmp/devcontainers/features/claude-code/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION} AS agent-codex
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=lang-node /usr/local/ /usr/local/
+COPY --from=devcontainers /tmp/devcontainers/features/codex /tmp/devcontainers/features/codex
+
+RUN bash /tmp/devcontainers/features/codex/install.sh
+
+FROM ubuntu:${UBUNTU_VERSION}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes \
+        bubblewrap \
+        ca-certificates \
+        curl \
+        git \
+        gnupg \
+        jq \
+        less \
+        libargon2-1 \
+        libpng16-16t64 \
+        libsodium23 \
+        libxml2-16 \
+        locales \
+        openssh-client \
+        procps \
+        python3 \
+        ripgrep \
+        tar \
+        unzip \
+        xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=s6 /opt/s6/ /
+COPY --from=tailscale /opt/tailscale/ /
+COPY --from=vscode /opt/vscode/ /
+COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
+COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
+COPY --from=lang-bun /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=lang-deno /usr/local/bin/deno /usr/local/bin/deno
+COPY --from=lang-go /usr/local/go /usr/local/go
+COPY --from=lang-go /opt/go /opt/go
+COPY --from=lang-node /usr/local/ /usr/local/
+COPY --from=lang-php /usr/local/ /usr/local/
+COPY --from=lang-python /usr/local/ /usr/local/
+COPY --from=lang-rust /usr/local/ /usr/local/
+COPY --from=agent-antigravity-cli /usr/local/share/antigravity-cli /usr/local/share/antigravity-cli
+COPY --from=agent-claude-code /usr/local/share/claude-code /usr/local/share/claude-code
+COPY --from=agent-codex /usr/local/share/codex /usr/local/share/codex
+COPY --from=agent-copilot /usr/local/share/copilot-cli /usr/local/share/copilot-cli
+COPY --from=agent-opencode /usr/local/share/opencode /usr/local/share/opencode
+
+RUN for directory in antigravity-cli claude-code codex copilot-cli opencode ; do \
+        chown -R ubuntu:ubuntu /usr/local/share/${directory} ; \
+    done \
+ && for binary in code herdr moshi-hook tailscale tailscaled ; do \
+        if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
+    done
+
+RUN set -eu ; \
+    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
+    missing="" ; \
+    for binary in agy bun claude code codex copilot cargo deno go herdr moshi-hook node npm opencode php python3 rustc tailscale tailscaled ; do \
+        command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
+    done ; \
+    if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \
+    echo "all expected binaries present"
+
+RUN mkdir -p /workspace /var/lib/tailscale /run/tailscale \
+ && chown ubuntu:ubuntu /workspace /var/lib/tailscale /run/tailscale
+
+COPY rootfs/ /
+
+ENV HOME=/home/ubuntu
+ENV GOPATH=/opt/go
+ENV GOROOT=/usr/local/go
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
+ENV HERDR_STARTUP_CWD=/workspace
+ENV TS_STATE_DIR=/var/lib/tailscale
+ENV S6_KEEP_ENV=1
+ENV SLEIPNIR_ENABLE_TAILSCALE=1
+ENV SLEIPNIR_ENABLE_HERDR=1
+ENV SLEIPNIR_ENABLE_MOSHI=1
+ENV SLEIPNIR_ENABLE_CODE_TUNNEL=1
+ENV SLEIPNIR_ENABLE_RC_CLAUDE=1
+ENV SLEIPNIR_ENABLE_RC_CODEX=1
+
+EXPOSE 24544
+
+ENTRYPOINT ["/init"]
