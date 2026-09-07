@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+
+[ "${SLEIPNIR_ENABLE_CODE_TUNNEL:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+
+exec s6-setuidgid ubuntu code tunnel \
+    --accept-server-license-terms \
+    --cli-data-dir /home/ubuntu/.vscode-cli \
+    --name "${CODE_TUNNEL_NAME:-Sleipnir}"
