@@ -1,0 +1,2 @@
+#!/command/with-contenv sh
+install -d -o ubuntu -g ubuntu -m 0755 /workspace
