@@ -1,0 +1,14 @@
+#!/command/with-contenv sh
+
+[ "${SLEIPNIR_ENABLE_RC_CODEX:-0}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+
+cd /workspace || exit 1
+
+s6-setuidgid ubuntu codex remote-control start || exit 1
+
+while pgrep -u ubuntu -f 'codex.*app-server' > /dev/null 2>&1 ; do
+    sleep 30
+done
+
+echo "sleipnir: codex app-server is gone, restarting remote control" >&2
+exit 1

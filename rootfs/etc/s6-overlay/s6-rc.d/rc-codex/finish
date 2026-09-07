@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+
+s6-setuidgid ubuntu codex remote-control stop > /dev/null 2>&1 || true
