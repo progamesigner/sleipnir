@@ -2,9 +2,10 @@ name: Publish sleipnir image
 
 on:
   push:
-    tags:
-    - v*.*.*
-
+    branches:
+    - main
+  schedule:
+  - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -86,18 +87,18 @@ jobs:
         registry: ghcr.io
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    - run: |
+        echo "IMAGE_VERSION=$(date --utc +'%Y.%m.%d')-r${{ github.run_number }}" >> $GITHUB_ENV
     - uses: docker/metadata-action@v5
       id: meta
       with:
         images: ghcr.io/${{ github.repository }}
         tags: |
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
+          type=sha,format=short
+          type=raw,value=latest
+          type=raw,value=${{ env.IMAGE_VERSION }}
     - working-directory: ${{ runner.temp }}/digests
       run: |
-        docker buildx imagetools create \
-          $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") \
-          $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+        docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
     - run: |
-        docker buildx imagetools inspect ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+        docker buildx imagetools inspect "$(jq -r '.tags[] | select(contains(":sha-"))' <<< "${DOCKER_METADATA_OUTPUT_JSON}")"
