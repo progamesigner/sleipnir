@@ -19,6 +19,12 @@ RUN apt-get update \
  && apt-get install --no-install-recommends --yes ca-certificates curl tar unzip xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
+FROM ubuntu:${UBUNTU_VERSION} AS installer
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
 FROM fetcher AS s6
 
 ARG TARGETARCH
@@ -60,11 +66,7 @@ RUN case "${TARGETARCH}" in \
  && tar -C /opt/vscode/usr/local/bin -xzf /tmp/code.tgz \
  && rm -f /tmp/code.tgz
 
-FROM ubuntu:${UBUNTU_VERSION} AS herdr
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS herdr
 
 ARG HERDR_VERSION=latest
 
@@ -72,11 +74,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/f
 
 RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS moshi
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS moshi
 
 ARG MOSHI_VERSION=latest
 
@@ -84,11 +82,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/f
 
 RUN VERSION="${MOSHI_VERSION}" BRIDGE=false CLIPBOARD=false bash /tmp/devcontainers/features/moshi/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS lang-bun
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS lang-bun
 
 ARG BUN_VERSION=1.4.2
 
@@ -99,11 +93,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/bun /tmp/devcontainers/fea
 
 RUN VERSION="${BUN_VERSION}" bash /tmp/devcontainers/features/bun/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS lang-deno
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS lang-deno
 
 ARG DENO_VERSION=2.9.5
 
@@ -114,11 +104,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/deno /tmp/devcontainers/fe
 
 RUN VERSION="${DENO_VERSION}" bash /tmp/devcontainers/features/deno/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS lang-go
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS lang-go
 
 ARG GO_VERSION=1.27.1
 
@@ -127,13 +113,12 @@ ENV _REMOTE_USER_HOME=/home/ubuntu
 
 COPY --from=devcontainers /tmp/devcontainers/features/go /tmp/devcontainers/features/go
 
-RUN VERSION="${GO_VERSION}" bash /tmp/devcontainers/features/go/install.sh
+RUN sed -i \
+        -e 's#tar -xz -f /tmp/go.tar.gz -C ${GOROOT} --strip-components=1#tar -xz -f /tmp/go.tar.gz -C ${GOROOT} --strip-components=1 --exclude="go/test/*" --exclude="go/test"#' \
+        /tmp/devcontainers/features/go/install.sh \
+ && VERSION="${GO_VERSION}" bash /tmp/devcontainers/features/go/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS lang-node
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS lang-node
 
 ARG NODE_VERSION=24.20.0
 
@@ -144,11 +129,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/node /tmp/devcontainers/fe
 
 RUN VERSION="${NODE_VERSION}" bash /tmp/devcontainers/features/node/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS lang-php
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS lang-php
 
 ARG PHP_VERSION=8.5.9
 
@@ -161,15 +142,10 @@ RUN sed -i \
         -e '/--disable-phar/d' \
         -e 's/docker-php-ext-install gd phar/docker-php-ext-install gd/' \
         -e 's/docker-php-ext-enable opcache sodium/docker-php-ext-enable sodium/' \
-        /tmp/devcontainers/features/php/install.sh
+        /tmp/devcontainers/features/php/install.sh \
+ && VERSION="${PHP_VERSION}" bash /tmp/devcontainers/features/php/install.sh
 
-RUN VERSION="${PHP_VERSION}" bash /tmp/devcontainers/features/php/install.sh
-
-FROM ubuntu:${UBUNTU_VERSION} AS lang-python
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS lang-python
 
 ARG PYTHON_VERSION=3.14.7
 
@@ -178,13 +154,12 @@ ENV _REMOTE_USER_HOME=/home/ubuntu
 
 COPY --from=devcontainers /tmp/devcontainers/features/python /tmp/devcontainers/features/python
 
-RUN VERSION="${PYTHON_VERSION}" bash /tmp/devcontainers/features/python/install.sh
+RUN sed -i \
+        -e '/tar -xJ -f \/tmp\/python.tar.xz -C \/usr\/src\/python --strip-components=1/a\    rm -rf /usr/src/python/Lib/test /usr/src/python/Lib/idlelib/idle_test' \
+        /tmp/devcontainers/features/python/install.sh \
+ && VERSION="${PYTHON_VERSION}" bash /tmp/devcontainers/features/python/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS lang-rust
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS lang-rust
 
 ARG RUST_VERSION=1.98.1
 
@@ -193,13 +168,12 @@ ENV _REMOTE_USER_HOME=/home/ubuntu
 
 COPY --from=devcontainers /tmp/devcontainers/features/rust /tmp/devcontainers/features/rust
 
-RUN VERSION="${RUST_VERSION}" bash /tmp/devcontainers/features/rust/install.sh
+RUN sed -i \
+        -e 's#RUST_COMPONENTS=\$(cat /tmp/rust/components)#RUST_COMPONENTS=$(grep -vE "^rust-docs(-json-preview)?$|^llvm-tools-preview$" /tmp/rust/components)#' \
+        /tmp/devcontainers/features/rust/install.sh \
+ && VERSION="${RUST_VERSION}" bash /tmp/devcontainers/features/rust/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS agent-antigravity-cli
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS agent-antigravity-cli
 
 ARG ANTIGRAVITY_CLI_VERSION=latest
 
@@ -207,11 +181,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/antigravity-cli /tmp/devco
 
 RUN VERSION="${ANTIGRAVITY_CLI_VERSION}" bash /tmp/devcontainers/features/antigravity-cli/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS agent-copilot
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS agent-copilot
 
 ARG COPILOT_VERSION=latest
 
@@ -219,11 +189,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/copilot-cli /tmp/devcontai
 
 RUN VERSION="${COPILOT_VERSION}" bash /tmp/devcontainers/features/copilot-cli/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS agent-opencode
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS agent-opencode
 
 ARG OPENCODE_VERSION=latest
 
@@ -231,11 +197,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/opencode /tmp/devcontainer
 
 RUN VERSION="${OPENCODE_VERSION}" bash /tmp/devcontainers/features/opencode/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS agent-claude-code
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS agent-claude-code
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -245,11 +207,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/claude-code /tmp/devcontai
 
 RUN bash /tmp/devcontainers/features/claude-code/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION} AS agent-codex
-
-RUN apt-get update \
- && apt-get install --no-install-recommends --yes ca-certificates curl gnupg jq tar unzip xz-utils \
- && rm -rf /var/lib/apt/lists/*
+FROM installer AS agent-codex
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
