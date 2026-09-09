@@ -1,3 +1,4 @@
+ARG COMPOSER_VERSION=2.10.3
 ARG UBUNTU_VERSION=26.04
 ARG UV_VERSION=0.12.11
 
@@ -96,6 +97,8 @@ ARG GITHUB_CLI_VERSION=latest
 COPY --from=devcontainers /tmp/devcontainers/features/github-cli /tmp/devcontainers/features/github-cli
 
 RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/install.sh
+
+FROM composer/composer:${COMPOSER_VERSION}-bin AS composer
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
@@ -272,6 +275,7 @@ RUN apt-get update \
 COPY --from=s6 /opt/s6/ /
 COPY --from=tailscale /opt/tailscale/ /
 COPY --from=vscode /opt/vscode/ /
+COPY --from=composer /composer /usr/local/bin/composer
 COPY --from=github-cli /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
 COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
@@ -290,23 +294,22 @@ COPY --from=agent-codex /usr/local/share/codex /usr/local/share/codex
 COPY --from=agent-copilot /usr/local/share/copilot-cli /usr/local/share/copilot-cli
 COPY --from=agent-opencode /usr/local/share/opencode /usr/local/share/opencode
 
-RUN for directory in antigravity-cli claude-code codex copilot-cli opencode ; do \
+RUN set -eu ; \
+    for directory in antigravity-cli claude-code codex copilot-cli opencode ; do \
         chown -R ubuntu:ubuntu /usr/local/share/${directory} ; \
     done \
  && for binary in code herdr moshi-hook tailscale tailscaled uv uvx ; do \
         if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
-    done
-
-RUN set -eu ; \
-    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
+    done \
+ && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
+    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
-    for binary in agy bun cc claude code codex copilot cargo deno gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
+    for binary in agy bun cc claude code codex composer copilot cargo deno gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
     done ; \
     if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \
-    echo "all expected binaries present"
-
-RUN printf 'ubuntu ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/ubuntu \
+    echo "all expected binaries present" \
+ && printf 'ubuntu ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/ubuntu \
  && chmod 0440 /etc/sudoers.d/ubuntu \
  && visudo --check --quiet --file /etc/sudoers.d/ubuntu \
  && mkdir -p /workspace /var/lib/tailscale /run/tailscale \
@@ -317,13 +320,15 @@ COPY rootfs/ /
 
 ENV HOME=/home/ubuntu
 ENV SHELL=/usr/bin/zsh
+ENV CARGO_HOME=/usr/local/cargo
 ENV GOPATH=/opt/go
 ENV GOROOT=/usr/local/go
-ENV CARGO_HOME=/usr/local/cargo
-ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV HERDR_STARTUP_CWD=/workspace
-ENV TS_STATE_DIR=/var/lib/tailscale
+ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV S6_KEEP_ENV=1
+ENV TS_STATE_DIR=/var/lib/tailscale
+ENV UV_TOOL_BIN_DIR=/usr/local/uv/bin
+ENV UV_TOOL_DIR=/usr/local/uv/tools
 ENV SLEIPNIR_ENABLE_CODE_TUNNEL=1
 ENV SLEIPNIR_ENABLE_DOTFILES=1
 ENV SLEIPNIR_ENABLE_HERDR=1

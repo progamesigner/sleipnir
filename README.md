@@ -31,6 +31,18 @@ The two `rc-*` services exist so the agent CLIs own mobile apps keep working. A 
 
 Beyond the language toolchains the image carries the things an agent reaches for when a repository does not build on the first try: `uv`/`uvx`, `build-essential`, `git`, `jq`, `ripgrep`, `vim`, `curl`, `wget`, `zip`/`unzip`, and `sudo`. `ubuntu` has passwordless sudo — s6 already supervises as root and drops each service with `s6-setuidgid`, so this grants a herdr pane nothing the supervision tree did not already have.
 
+Each language also needs the thing that actually installs its dependencies, otherwise the toolchain cannot check out a repository and build it:
+
+| Language | Installer | How it gets in |
+| --- | --- | --- |
+| PHP | `composer` | `COPY --from=composer/composer:<version>-bin` — that image holds the phar and nothing else |
+| Node | `npm` | bundled with the node feature |
+| Python | `uv`, `uvx` | `COPY --from=ghcr.io/astral-sh/uv` |
+| Rust | `cargo` (with `clippy` and `rustfmt`) | already in the rust feature |
+| Go | `go` | already in the go feature |
+
+`UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` point at `/usr/local/uv`, owned by `ubuntu` and on `PATH`, so `uv tool install` from a pane lands somewhere usable. A repository that needs pnpm or yarn can reach them through `corepack`, which Node 24 still bundles.
+
 `herdr` and `moshi` come from the same place, built with `BRIDGE=false`: their devcontainer bridge exists to reach a Mac's socket over SSH, and Sleipnir has no Mac to borrow from. It runs its own herdr server and its own Moshi daemon.
 
 ### Updating a CLI without rebuilding
