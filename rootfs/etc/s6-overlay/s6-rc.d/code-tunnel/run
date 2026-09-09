@@ -5,4 +5,4 @@
 exec s6-setuidgid ubuntu code tunnel \
     --accept-server-license-terms \
     --cli-data-dir /home/ubuntu/.vscode-cli \
-    --name "${CODE_TUNNEL_NAME:-Sleipnir}"
+    --name "${CODE_TUNNEL_NAME:-sleipnir}"

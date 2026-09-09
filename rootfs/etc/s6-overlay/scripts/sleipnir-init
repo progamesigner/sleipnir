@@ -17,6 +17,7 @@ for DIRECTORY in \
     /home/ubuntu/.local/state \
     /home/ubuntu/.local/state/moshi \
     /home/ubuntu/.vscode-cli \
+    /home/ubuntu/.vscode-server \
     /run/tailscale \
     /var/lib/tailscale \
     /workspace

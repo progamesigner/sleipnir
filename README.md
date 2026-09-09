@@ -65,7 +65,7 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `DOTFILES_REPOSITORY` | `https://github.com/progamesigner/dotfiles` | Git repository cloned into `/home/ubuntu/.dotfiles` on startup. |
 | `DOTFILES_INSTALL_SCRIPT` | `install.sh` | Repository-relative installer executed as `ubuntu`. |
 | `MOSHI_LISTEN` | `0.0.0.0:24544` | Moshi web client. |
-| `CODE_TUNNEL_NAME` | `Sleipnir` | Name shown in vscode.dev. |
+| `CODE_TUNNEL_NAME` | `Sleipnir` | Name shown in vscode.dev. The CLI lowercases it and accepts only letters, digits and `-` up to 20 characters, so the default registers as `sleipnir`. |
 | `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. |
 | `HERDR_STARTUP_CWD` | `/workspace` | herdr seeds an initial shell pane here. |
 
@@ -120,6 +120,7 @@ Each agent keeps its own credentials, so each gets its own volume. On every star
 | `/home/ubuntu/.local/state/moshi` | Moshi **pairing secret** — lose it and you pair the phone again |
 | `/home/ubuntu/.local/bin` | CLI updates that outlive a restart |
 | `/home/ubuntu/.vscode-cli` | VS Code tunnel; the server downloads on first start |
+| `/home/ubuntu/.vscode-server` | Remote extensions and their `globalStorage`; without it every restart reinstalls them |
 | `/var/lib/tailscale` | Tailscale state and SSH host keys; owned by `ubuntu`, because `tailscaled` does not run as root |
 | `/workspace` | code |
 
