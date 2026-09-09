@@ -74,6 +74,12 @@ COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/f
 
 RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
 
+FROM installer AS devtools
+
+COPY --from=devcontainers /tmp/devcontainers/features/devtools /tmp/devcontainers/features/devtools
+
+RUN CLOUDFLARED=none COSIGN=latest TAILSCALE=none bash /tmp/devcontainers/features/devtools/install.sh
+
 FROM installer AS moshi
 
 ARG MOSHI_VERSION=latest
@@ -217,7 +223,7 @@ COPY --from=devcontainers /tmp/devcontainers/features/codex /tmp/devcontainers/f
 
 RUN bash /tmp/devcontainers/features/codex/install.sh
 
-FROM ubuntu:${UBUNTU_VERSION}
+FROM devtools
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -244,6 +250,7 @@ RUN apt-get update \
         tar \
         unzip \
         xz-utils \
+        zsh \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=s6 /opt/s6/ /
@@ -282,11 +289,13 @@ RUN set -eu ; \
     echo "all expected binaries present"
 
 RUN mkdir -p /workspace /var/lib/tailscale /run/tailscale \
- && chown ubuntu:ubuntu /workspace /var/lib/tailscale /run/tailscale
+ && chown ubuntu:ubuntu /workspace /var/lib/tailscale /run/tailscale \
+ && usermod --shell /usr/bin/zsh ubuntu
 
 COPY rootfs/ /
 
 ENV HOME=/home/ubuntu
+ENV SHELL=/usr/bin/zsh
 ENV GOPATH=/opt/go
 ENV GOROOT=/usr/local/go
 ENV CARGO_HOME=/usr/local/cargo

@@ -21,7 +21,7 @@ The two `rc-*` services exist so the agent CLIs own mobile apps keep working. A 
 
 ## Agent CLIs
 
-`claude`, `codex`, `agy`, `copilot`, `opencode` — installed at build time from the same [progamesigner/devcontainers](https://github.com/progamesigner/devcontainers) feature installers the devcontainers use, so the versions and install paths stay consistent between the two.
+`claude`, `codex`, `agy`, `copilot`, `opencode` — installed at build time from the same [progamesigner/devcontainers](https://github.com/progamesigner/devcontainers) feature installers the devcontainers use, so the versions and install paths stay consistent between the two. The image also includes the `devtools` feature (with cosign) and uses zsh as `ubuntu`’s login and interactive shell.
 
 `herdr` and `moshi` come from the same place, built with `BRIDGE=false`: their devcontainer bridge exists to reach a Mac's socket over SSH, and Sleipnir has no Mac to borrow from. It runs its own herdr server and its own Moshi daemon.
 
@@ -55,24 +55,34 @@ Two consequences of userspace mode, neither of which this pod runs into:
 - outbound connections **to other tailnet nodes** have to go through the SOCKS5 (`localhost:1055`) or HTTP (`localhost:1056`) proxy. Everything here talks to the public internet or to the cluster instead.
 - it cannot use an exit node or a subnet router.
 
-Tailscale SSH also needs an ACL rule. Without one the connection is refused by policy, which looks nothing like a capability problem:
+Tailscale SSH needs both a network grant for TCP port 22 and an SSH rule. The following policy limits access to the tailnet owner and the `ubuntu` account:
 
 ```json
+"tagOwners": {
+  "tag:sleipnir": ["autogroup:owner"]
+},
+"grants": [
+  {
+    "src": ["autogroup:owner"],
+    "dst": ["tag:sleipnir"],
+    "ip": ["tcp:22"]
+  }
+],
 "ssh": [
   {
     "action": "accept",
-    "src": ["autogroup:member"],
+    "src": ["autogroup:owner"],
     "dst": ["tag:sleipnir"],
     "users": ["ubuntu"]
   }
 ]
 ```
 
-`"action": "check"` also works but makes every session wait on an interactive browser check.
+The node must also carry `tag:sleipnir`, either from a pre-tagged auth key or from the Machines page. Use `"action": "check"` with a `checkPeriod` when periodic reauthentication is preferred.
 
 ## Volumes
 
-Each agent keeps its own credentials, so each gets its own volume. Two are easy to miss:
+Each agent keeps its own credentials, so each gets its own volume. On every start, `sleipnir-init` creates these writable directories and corrects their ownership to `ubuntu:ubuntu`; this also handles fresh PVC mount points. Two are easy to miss:
 
 | Path | Holds |
 | --- | --- |
@@ -87,7 +97,7 @@ Each agent keeps its own credentials, so each gets its own volume. Two are easy 
 | `/home/ubuntu/.local/state/moshi` | Moshi **pairing secret** — lose it and you pair the phone again |
 | `/home/ubuntu/.local/bin` | CLI updates that outlive a restart |
 | `/home/ubuntu/.vscode-cli` | VS Code tunnel; the server downloads on first start |
-| `/var/lib/tailscale` | Tailscale state and SSH host keys |
+| `/var/lib/tailscale` | Tailscale state and SSH host keys; owned by `ubuntu`, because `tailscaled` does not run as root |
 | `/workspace` | code |
 
 ## First start
