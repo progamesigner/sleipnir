@@ -4,6 +4,7 @@ for DIRECTORY in \
     /home/ubuntu/.agents \
     /home/ubuntu/.claude \
     /home/ubuntu/.codex \
+    /home/ubuntu/.config/gh \
     /home/ubuntu/.config/herdr \
     /home/ubuntu/.config/moshi \
     /home/ubuntu/.config/opencode \
@@ -21,6 +22,13 @@ for DIRECTORY in \
     /workspace
 do
     install -d -o ubuntu -g ubuntu -m 0755 ${DIRECTORY}
+done
+
+for DIRECTORY in \
+    /home/ubuntu/.gnupg \
+    /home/ubuntu/.ssh
+do
+    install -d -o ubuntu -g ubuntu -m 0700 ${DIRECTORY}
 done
 
 [ -e /home/ubuntu/.claude/.claude.json ] || install -o ubuntu -g ubuntu -m 0644 /dev/null /home/ubuntu/.claude/.claude.json

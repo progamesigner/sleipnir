@@ -1,0 +1,14 @@
+#!/command/with-contenv sh
+
+for DIRECTORY in \
+    /home/ubuntu/.gnupg \
+    /home/ubuntu/.ssh
+do
+    [ -d ${DIRECTORY} ] || continue
+
+    chown ubuntu:ubuntu ${DIRECTORY}
+    chmod 0700 ${DIRECTORY}
+
+    find ${DIRECTORY} -mindepth 1 -maxdepth 1 -type f -exec chown ubuntu:ubuntu -- {} +
+    find ${DIRECTORY} -mindepth 1 -maxdepth 1 -type f -exec chmod go-rwx -- {} +
+done
