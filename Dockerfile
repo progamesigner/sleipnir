@@ -1,4 +1,5 @@
 ARG UBUNTU_VERSION=26.04
+ARG UV_VERSION=0.12.11
 
 FROM ubuntu:${UBUNTU_VERSION} AS devcontainers
 
@@ -87,6 +88,16 @@ ARG MOSHI_VERSION=latest
 COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/features/moshi
 
 RUN VERSION="${MOSHI_VERSION}" BRIDGE=false CLIPBOARD=false bash /tmp/devcontainers/features/moshi/install.sh
+
+FROM installer AS github-cli
+
+ARG GITHUB_CLI_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/github-cli /tmp/devcontainers/features/github-cli
+
+RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/install.sh
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM installer AS lang-bun
 
@@ -232,6 +243,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update \
  && apt-get install --no-install-recommends --yes \
         bubblewrap \
+        build-essential \
         ca-certificates \
         curl \
         git \
@@ -247,17 +259,23 @@ RUN apt-get update \
         procps \
         python3 \
         ripgrep \
+        sudo \
         tar \
         unzip \
+        vim \
+        wget \
         xz-utils \
+        zip \
         zsh \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=s6 /opt/s6/ /
 COPY --from=tailscale /opt/tailscale/ /
 COPY --from=vscode /opt/vscode/ /
+COPY --from=github-cli /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
 COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
+COPY --from=uv /uv /uvx /usr/local/bin/
 COPY --from=lang-bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=lang-deno /usr/local/bin/deno /usr/local/bin/deno
 COPY --from=lang-go /usr/local/go /usr/local/go
@@ -275,20 +293,23 @@ COPY --from=agent-opencode /usr/local/share/opencode /usr/local/share/opencode
 RUN for directory in antigravity-cli claude-code codex copilot-cli opencode ; do \
         chown -R ubuntu:ubuntu /usr/local/share/${directory} ; \
     done \
- && for binary in code herdr moshi-hook tailscale tailscaled ; do \
+ && for binary in code herdr moshi-hook tailscale tailscaled uv uvx ; do \
         if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
     done
 
 RUN set -eu ; \
     export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
-    for binary in agy bun claude code codex copilot cargo deno go herdr moshi-hook node npm opencode php python3 rustc tailscale tailscaled ; do \
+    for binary in agy bun cc claude code codex copilot cargo deno gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
     done ; \
     if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \
     echo "all expected binaries present"
 
-RUN mkdir -p /workspace /var/lib/tailscale /run/tailscale \
+RUN printf 'ubuntu ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/ubuntu \
+ && chmod 0440 /etc/sudoers.d/ubuntu \
+ && visudo --check --quiet --file /etc/sudoers.d/ubuntu \
+ && mkdir -p /workspace /var/lib/tailscale /run/tailscale \
  && chown ubuntu:ubuntu /workspace /var/lib/tailscale /run/tailscale \
  && usermod --shell /usr/bin/zsh ubuntu
 
