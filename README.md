@@ -21,6 +21,8 @@ Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tre
 
 `permissions-init` runs after `dotfiles-init` and re-tightens `~/.gnupg` and `~/.ssh` to `0700`, plus the files in them to owner-only. Both are PVC mounts, so they arrive as `0775` with the fsGroup setgid bit, and the CephFS volumes carry a default ACL that grants the group write access on new files whatever the umask is. GnuPG and OpenSSH both refuse a home directory anyone but the owner can reach, so without this step `gpg -k` warns about unsafe permissions and `ssh` rejects `~/.ssh/config`.
 
+`rc-claude` runs with `--no-create-session-in-dir`, so nothing is pre-created in `/workspace`; every session comes from claude.ai/code or the app on demand. Those are auto-named, and the name prefix comes from `--remote-control-session-name-prefix` (`CLAUDE_RC_NAME`) rather than `--name`, which only labels a session the service creates itself. Claude lowercases the prefix and replaces everything but letters and digits with `-`.
+
 The two `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it shares the same `~/.claude` or `~/.codex`, but it is not in a pane, so neither herdr nor Moshi can see it. That is expected.
 
 ## Agent CLIs
@@ -65,8 +67,8 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `DOTFILES_REPOSITORY` | `https://github.com/progamesigner/dotfiles` | Git repository cloned into `/home/ubuntu/.dotfiles` on startup. |
 | `DOTFILES_INSTALL_SCRIPT` | `install.sh` | Repository-relative installer executed as `ubuntu`. |
 | `MOSHI_LISTEN` | `0.0.0.0:24544` | Moshi web client. |
-| `CODE_TUNNEL_NAME` | `Sleipnir` | Name shown in vscode.dev. The CLI lowercases it and accepts only letters, digits and `-` up to 20 characters, so the default registers as `sleipnir`. |
-| `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. |
+| `CODE_TUNNEL_NAME` | `sleipnir` | Name shown in vscode.dev. The CLI lowercases the name and accepts only letters, digits and `-`, up to 20 characters, so an uppercase value registers lowercased. |
+| `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. It is also passed as the session name prefix; without it the prefix falls back to the hostname, which under Kubernetes is the pod name unless the pod sets `hostname`. |
 | `HERDR_STARTUP_CWD` | `/workspace` | herdr seeds an initial shell pane here. |
 
 ### Tailscale

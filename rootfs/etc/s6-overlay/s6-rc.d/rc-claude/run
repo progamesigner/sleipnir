@@ -1,9 +1,13 @@
 #!/command/with-contenv sh
 
-
 [ "${SLEIPNIR_ENABLE_RC_CLAUDE:-0}" = "1" ] || { s6-svc -O . ; exit 0 ; }
 
+RC_NAME="${CLAUDE_RC_NAME:-${TS_HOSTNAME:-sleipnir}}"
+
 cd /workspace || exit 1
+
 exec s6-setuidgid ubuntu claude remote-control \
-    --name "${CLAUDE_RC_NAME:-${TS_HOSTNAME:-Sleipnir}}" \
-    --spawn same-dir
+    --name "${RC_NAME}" \
+    --remote-control-session-name-prefix "${RC_NAME}" \
+    --spawn same-dir \
+    --no-create-session-in-dir
