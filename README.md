@@ -8,6 +8,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | --- | --- | --- | --- |
 | `sleipnir-init` | oneshot | always | — |
 | `dotfiles-init` | oneshot | `SLEIPNIR_ENABLE_DOTFILES` (default 1) | dependent agent services do not start |
+| `permissions-init` | oneshot | always | dependent agent services do not start |
 | `tailscaled` | longrun | `SLEIPNIR_ENABLE_TAILSCALE` (default 1) | container exits, Kubernetes restarts it |
 | `tailscale-up` | oneshot | `SLEIPNIR_ENABLE_TAILSCALE` | — |
 | `herdr` | longrun | `SLEIPNIR_ENABLE_HERDR` (default 1) | container exits |
@@ -18,11 +19,17 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 
 Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tree runs as root, which is s6-overlay's normal arrangement.
 
+`permissions-init` runs after `dotfiles-init` and re-tightens `~/.gnupg` and `~/.ssh` to `0700`, plus the files in them to owner-only. Both are PVC mounts, so they arrive as `0775` with the fsGroup setgid bit, and the CephFS volumes carry a default ACL that grants the group write access on new files whatever the umask is. GnuPG and OpenSSH both refuse a home directory anyone but the owner can reach, so without this step `gpg -k` warns about unsafe permissions and `ssh` rejects `~/.ssh/config`.
+
 The two `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it shares the same `~/.claude` or `~/.codex`, but it is not in a pane, so neither herdr nor Moshi can see it. That is expected.
 
 ## Agent CLIs
 
 `claude`, `codex`, `agy`, `copilot`, `opencode` — installed at build time from the same [progamesigner/devcontainers](https://github.com/progamesigner/devcontainers) feature installers the devcontainers use, so the versions and install paths stay consistent between the two. The image also includes the `devtools` feature (with cosign) and uses zsh as `ubuntu`’s login and interactive shell.
+
+`gh` comes from the same feature set. The agents lean on it for anything involving a pull request, and the pod mounts a PVC at `~/.config/gh` to keep the login, so it belongs in the image rather than in `~/.local/bin`.
+
+Beyond the language toolchains the image carries the things an agent reaches for when a repository does not build on the first try: `uv`/`uvx`, `build-essential`, `git`, `jq`, `ripgrep`, `vim`, `curl`, `wget`, `zip`/`unzip`, and `sudo`. `ubuntu` has passwordless sudo — s6 already supervises as root and drops each service with `s6-setuidgid`, so this grants a herdr pane nothing the supervision tree did not already have.
 
 `herdr` and `moshi` come from the same place, built with `BRIDGE=false`: their devcontainer bridge exists to reach a Mac's socket over SSH, and Sleipnir has no Mac to borrow from. It runs its own herdr server and its own Moshi daemon.
 
