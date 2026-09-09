@@ -1,8 +1,27 @@
 #!/command/with-contenv sh
 
-install -d -o ubuntu -g ubuntu -m 0755 /home/ubuntu/.claude
-install -d -o ubuntu -g ubuntu -m 0755 /run/tailscale
-install -d -o ubuntu -g ubuntu -m 0755 /workspace
+for DIRECTORY in \
+    /home/ubuntu/.agents \
+    /home/ubuntu/.claude \
+    /home/ubuntu/.codex \
+    /home/ubuntu/.config/herdr \
+    /home/ubuntu/.config/moshi \
+    /home/ubuntu/.config/opencode \
+    /home/ubuntu/.copilot \
+    /home/ubuntu/.gemini \
+    /home/ubuntu/.local \
+    /home/ubuntu/.local/bin \
+    /home/ubuntu/.local/share \
+    /home/ubuntu/.local/share/opencode \
+    /home/ubuntu/.local/state \
+    /home/ubuntu/.local/state/moshi \
+    /home/ubuntu/.vscode-cli \
+    /run/tailscale \
+    /var/lib/tailscale \
+    /workspace
+do
+    install -d -o ubuntu -g ubuntu -m 0755 ${DIRECTORY}
+done
 
 [ -e /home/ubuntu/.claude/.claude.json ] || install -o ubuntu -g ubuntu -m 0644 /dev/null /home/ubuntu/.claude/.claude.json
 ln -sf /home/ubuntu/.claude/.claude.json /home/ubuntu/.claude.json
