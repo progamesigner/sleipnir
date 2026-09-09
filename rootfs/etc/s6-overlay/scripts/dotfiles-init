@@ -1,0 +1,32 @@
+#!/command/with-contenv sh
+
+set -eu
+
+[ "${SLEIPNIR_ENABLE_DOTFILES:-1}" = "1" ] || exit 0
+
+repository=${DOTFILES_REPOSITORY:-https://github.com/progamesigner/dotfiles}
+install_script=${DOTFILES_INSTALL_SCRIPT:-install.sh}
+dotfiles_directory=/home/ubuntu/.dotfiles
+
+case "${install_script}" in
+    /*|*../*|../*|..)
+        echo "sleipnir: DOTFILES_INSTALL_SCRIPT must be a relative path inside the repository" >&2
+        exit 1
+        ;;
+esac
+
+install -d -o ubuntu -g ubuntu -m 0755 "${dotfiles_directory}"
+find "${dotfiles_directory}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+
+s6-setuidgid ubuntu git clone -- "${repository}" "${dotfiles_directory}"
+
+if [ ! -f "${dotfiles_directory}/${install_script}" ] ; then
+    echo "sleipnir: dotfiles install script not found: ${install_script}" >&2
+    exit 1
+fi
+
+(
+    cd "${dotfiles_directory}"
+    exec s6-setuidgid ubuntu "./${install_script}"
+)
+

@@ -7,6 +7,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | Service | Type | Enabled by | If it dies |
 | --- | --- | --- | --- |
 | `sleipnir-init` | oneshot | always | — |
+| `dotfiles-init` | oneshot | `SLEIPNIR_ENABLE_DOTFILES` (default 1) | dependent agent services do not start |
 | `tailscaled` | longrun | `SLEIPNIR_ENABLE_TAILSCALE` (default 1) | container exits, Kubernetes restarts it |
 | `tailscale-up` | oneshot | `SLEIPNIR_ENABLE_TAILSCALE` | — |
 | `herdr` | longrun | `SLEIPNIR_ENABLE_HERDR` (default 1) | container exits |
@@ -41,6 +42,9 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `TS_AUTHKEY` | — | Tailscale auth key. Use a **reusable, tagged** key; an ephemeral node is deleted when it goes offline and comes back with a new address. |
 | `TS_HOSTNAME` | `sleipnir` | Tailnet hostname. Set it per pod, otherwise the node shows up under the pod name and changes on every redeploy. |
 | `TS_STATE_DIR` | `/var/lib/tailscale` | Also where Tailscale SSH keeps its host keys. |
+| `SLEIPNIR_ENABLE_DOTFILES` | `1` | Set to `0` to skip cloning and installing dotfiles. |
+| `DOTFILES_REPOSITORY` | `https://github.com/progamesigner/dotfiles` | Git repository cloned into `/home/ubuntu/.dotfiles` on startup. |
+| `DOTFILES_INSTALL_SCRIPT` | `install.sh` | Repository-relative installer executed as `ubuntu`. |
 | `MOSHI_LISTEN` | `0.0.0.0:24544` | Moshi web client. |
 | `CODE_TUNNEL_NAME` | `Sleipnir` | Name shown in vscode.dev. |
 | `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. |
