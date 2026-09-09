@@ -15,6 +15,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | `moshi` | longrun | `SLEIPNIR_ENABLE_MOSHI` (default 1) | s6 restarts it |
 | `code-tunnel` | longrun | `SLEIPNIR_ENABLE_CODE_TUNNEL` (default 1) | s6 restarts it |
 | `rc-claude` | longrun | `SLEIPNIR_ENABLE_RC_CLAUDE` (default 0) | s6 restarts it |
+| `rc-claude-log` | longrun | always; logger for `rc-claude` | s6 restarts it |
 | `rc-codex` | longrun | `SLEIPNIR_ENABLE_RC_CODEX` (default 0) | s6 restarts it |
 
 Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tree runs as root, which is s6-overlay's normal arrangement.
@@ -22,6 +23,8 @@ Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tre
 `permissions-init` runs after `dotfiles-init` and re-tightens `~/.gnupg` and `~/.ssh` to `0700`, plus the files in them to owner-only. Both are PVC mounts, so they arrive as `0775` with the fsGroup setgid bit, and the CephFS volumes carry a default ACL that grants the group write access on new files whatever the umask is. GnuPG and OpenSSH both refuse a home directory anyone but the owner can reach, so without this step `gpg -k` warns about unsafe permissions and `ssh` rejects `~/.ssh/config`.
 
 `rc-claude` runs with `--no-create-session-in-dir`, so nothing is pre-created in `/workspace`; every session comes from claude.ai/code or the app on demand. Those are auto-named, and the name prefix comes from `--remote-control-session-name-prefix` (`CLAUDE_RC_NAME`) rather than `--name`, which only labels a session the service creates itself. Claude lowercases the prefix and replaces everything but letters and digits with `-`.
+
+Its status screen redraws about once a second, and with no TTY under s6 every redraw is reprinted in full, which buries everything else in `kubectl logs`. `remote-control` has no quiet mode, so `rc-claude` is an s6 pipeline instead: `producer-for` sends its stdout to `rc-claude-log`, which is `s6-log -b n3 s1000000 T /var/log/rc-claude` — four rotated 1MB files, timestamped, readable with `tail /var/log/rc-claude/current`. Only stdout is piped, so anything the CLI writes to stderr still reaches the container log.
 
 The two `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it shares the same `~/.claude` or `~/.codex`, but it is not in a pane, so neither herdr nor Moshi can see it. That is expected.
 
