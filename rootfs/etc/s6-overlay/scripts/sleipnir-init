@@ -4,6 +4,7 @@ for DIRECTORY in \
     /home/ubuntu/.agents \
     /home/ubuntu/.claude \
     /home/ubuntu/.codex \
+    /home/ubuntu/.config \
     /home/ubuntu/.config/gh \
     /home/ubuntu/.config/herdr \
     /home/ubuntu/.config/moshi \
