@@ -7,13 +7,13 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | Service | Type | Enabled by | If it dies |
 | --- | --- | --- | --- |
 | `sleipnir-init` | oneshot | always | — |
-| `dotfiles-init` | oneshot | `SLEIPNIR_ENABLE_DOTFILES` (default 1) | dependent agent services do not start |
+| `dotfiles-init` | oneshot | `SLEIPNIR_ENABLE_DOTFILES` (default 0) | dependent agent services do not start |
 | `permissions-init` | oneshot | always | dependent agent services do not start |
-| `tailscaled` | longrun | `SLEIPNIR_ENABLE_TAILSCALE` (default 1) | container exits, Kubernetes restarts it |
+| `tailscaled` | longrun | `SLEIPNIR_ENABLE_TAILSCALE` (default 0) | container exits, Kubernetes restarts it |
 | `tailscale-up` | oneshot | `SLEIPNIR_ENABLE_TAILSCALE` | — |
 | `herdr` | longrun | `SLEIPNIR_ENABLE_HERDR` (default 1) | container exits |
 | `moshi` | longrun | `SLEIPNIR_ENABLE_MOSHI` (default 1) | s6 restarts it |
-| `code-tunnel` | longrun | `SLEIPNIR_ENABLE_CODE_TUNNEL` (default 1) | s6 restarts it |
+| `code-tunnel` | longrun | `SLEIPNIR_ENABLE_CODE_TUNNEL` (default 0) | s6 restarts it |
 | `rc-agy` | longrun | `SLEIPNIR_ENABLE_RC_AGY` (default 0) | s6 restarts it |
 | `rc-agy-log` | longrun | always; logger for `rc-agy` | s6 restarts it |
 | `rc-claude` | longrun | `SLEIPNIR_ENABLE_RC_CLAUDE` (default 0) | s6 restarts it |
@@ -70,10 +70,12 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `TS_AUTHKEY` | — | Tailscale auth key. Use a **reusable, tagged** key; an ephemeral node is deleted when it goes offline and comes back with a new address. |
 | `TS_HOSTNAME` | `sleipnir` | Tailnet hostname. Set it per pod, otherwise the node shows up under the pod name and changes on every redeploy. |
 | `TS_STATE_DIR` | `/var/lib/tailscale` | Also where Tailscale SSH keeps its host keys. |
-| `SLEIPNIR_ENABLE_DOTFILES` | `1` | Set to `0` to skip cloning and installing dotfiles. |
+| `SLEIPNIR_ENABLE_TAILSCALE` | `0` | Set to `1` to run Tailscale and connect the node. |
+| `SLEIPNIR_ENABLE_DOTFILES` | `0` | Set to `1` to clone and install dotfiles. |
 | `DOTFILES_REPOSITORY` | `https://github.com/progamesigner/dotfiles` | Git repository cloned into `/home/ubuntu/.dotfiles` on startup. |
 | `DOTFILES_INSTALL_SCRIPT` | `install.sh` | Repository-relative installer executed as `ubuntu`. |
 | `MOSHI_LISTEN` | `0.0.0.0:24544` | Moshi web client. |
+| `SLEIPNIR_ENABLE_CODE_TUNNEL` | `0` | Set to `1` to run the VS Code tunnel. |
 | `CODE_TUNNEL_NAME` | `sleipnir` | Name shown in vscode.dev. The CLI lowercases the name and accepts only letters, digits and `-`, up to 20 characters, so an uppercase value registers lowercased. |
 | `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. It is also passed as the session name prefix; without it the prefix falls back to the hostname, which under Kubernetes is the pod name unless the pod sets `hostname`. |
 | `HERDR_STARTUP_CWD` | `/workspace` | herdr seeds an initial shell pane here. |
@@ -135,10 +137,10 @@ Each agent keeps its own credentials, so each gets its own volume. On every star
 
 ## First start
 
-Nothing is logged in yet, and that is fine: Tailscale, Herdr and Moshi come up on their own, so there is a way in before any agent exists.
+Nothing is logged in yet, and that is fine: Herdr and Moshi come up on their own, so there is a way in before any agent exists.
 
-1. Approve the node, or use a pre-approved tagged auth key.
-2. `ssh ubuntu@<TS_HOSTNAME>`, or open the Moshi web client on port 24544.
+1. If enabling Tailscale, approve the node or use a pre-approved tagged auth key.
+2. Connect through an enabled access path, such as `ssh ubuntu@<TS_HOSTNAME>` with Tailscale or the Moshi web client on port 24544.
 3. Log into each CLI once. Credentials land on the volumes and stay there.
 4. Pair Moshi: `moshi-hook pair --token <token>`, then `moshi-hook install`.
 5. `code tunnel` prints a device-login URL on its first run; read it with `s6-svc` logs or from the pane.

@@ -1,6 +1,6 @@
 #!/command/with-contenv sh
 
-[ "${SLEIPNIR_ENABLE_TAILSCALE:-1}" = "1" ] || exit 0
+[ "${SLEIPNIR_ENABLE_TAILSCALE:-0}" = "1" ] || exit 0
 
 if [ -z "${TS_AUTHKEY}" ] ; then
     echo "sleipnir: TS_AUTHKEY is empty, skipping 'tailscale up'" >&2
