@@ -14,6 +14,8 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | `herdr` | longrun | `SLEIPNIR_ENABLE_HERDR` (default 1) | container exits |
 | `moshi` | longrun | `SLEIPNIR_ENABLE_MOSHI` (default 1) | s6 restarts it |
 | `code-tunnel` | longrun | `SLEIPNIR_ENABLE_CODE_TUNNEL` (default 1) | s6 restarts it |
+| `rc-agy` | longrun | `SLEIPNIR_ENABLE_RC_AGY` (default 0) | s6 restarts it |
+| `rc-agy-log` | longrun | always; logger for `rc-agy` | s6 restarts it |
 | `rc-claude` | longrun | `SLEIPNIR_ENABLE_RC_CLAUDE` (default 0) | s6 restarts it |
 | `rc-claude-log` | longrun | always; logger for `rc-claude` | s6 restarts it |
 | `rc-codex` | longrun | `SLEIPNIR_ENABLE_RC_CODEX` (default 0) | s6 restarts it |
@@ -26,7 +28,9 @@ Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tre
 
 Its status screen redraws about once a second, and with no TTY under s6 every redraw is reprinted in full, which buries everything else in `kubectl logs`. `remote-control` has no quiet mode, so `rc-claude` is an s6 pipeline instead: `producer-for` sends its stdout to `rc-claude-log`, which is `s6-log -b n3 s1000000 T /var/log/rc-claude` — four rotated 1MB files, timestamped, readable with `tail /var/log/rc-claude/current`. Only stdout is piped, so anything the CLI writes to stderr still reaches the container log.
 
-The two `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it shares the same `~/.claude` or `~/.codex`, but it is not in a pane, so neither herdr nor Moshi can see it. That is expected.
+`rc-agy` needs a detour. On Linux `agy remote-control start` writes a systemd user unit and hands it to `systemctl --user`, which cannot work here: there is no systemd and no session bus, so it fails at `daemon-reload`. The unit it writes points at `agy remote-control serve`, an undocumented foreground subcommand, and that is what the service runs directly under s6 — no systemd involved. The rest of the unit's semantics move into the service directory: `finish` stops the service for good on exit 3 (the unit's `RestartPreventExitStatus`) and otherwise sleeps 10s before s6 restarts it (`RestartSec`), with `timeout-finish` raised to 15s so that sleep survives. The sleep is skipped when the service is being stopped on purpose, so shutting the container down does not wait on it. The name shown in Antigravity Remote Control is set once with `agy remote-control start --name <name>` — it records the name before the systemd step fails — and persists in `~/.gemini/config/config.json`, which is on a PVC.
+
+The three `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it shares the same `~/.claude`, `~/.codex` or `~/.gemini`, but it is not in a pane, so neither herdr nor Moshi can see it. That is expected.
 
 ## Agent CLIs
 

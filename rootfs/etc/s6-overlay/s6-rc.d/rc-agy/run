@@ -1,0 +1,7 @@
+#!/command/with-contenv sh
+
+[ "${SLEIPNIR_ENABLE_RC_AGY:-0}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+
+cd /workspace || exit 1
+
+exec s6-setuidgid ubuntu agy remote-control serve
