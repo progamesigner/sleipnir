@@ -319,16 +319,21 @@ RUN set -eu ; \
 COPY rootfs/ /
 
 ENV HOME=/home/ubuntu
+ENV LANG=C.utf8
+ENV LC_ALL=C.utf8
+ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV SHELL=/usr/bin/zsh
+
 ENV CARGO_HOME=/usr/local/cargo
 ENV GOPATH=/opt/go
 ENV GOROOT=/usr/local/go
+
 ENV HERDR_STARTUP_CWD=/workspace
-ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV S6_KEEP_ENV=1
 ENV TS_STATE_DIR=/var/lib/tailscale
 ENV UV_TOOL_BIN_DIR=/usr/local/uv/bin
 ENV UV_TOOL_DIR=/usr/local/uv/tools
+
 ENV SLEIPNIR_ENABLE_CODE_TUNNEL=0
 ENV SLEIPNIR_ENABLE_DOTFILES=0
 ENV SLEIPNIR_ENABLE_HERDR=1
