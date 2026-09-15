@@ -302,7 +302,7 @@ RUN set -eu ; \
         if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
     done \
  && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/npm /usr/local/npm/bin /usr/local/npm/lib /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
-    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
+    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
     for binary in agy bun cc claude code codex composer copilot cargo deno gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
