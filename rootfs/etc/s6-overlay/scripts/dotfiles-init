@@ -30,3 +30,6 @@ fi
     exec s6-setuidgid ubuntu "./${install_script}"
 )
 
+if s6-setuidgid ubuntu gh auth token > /dev/null 2>&1 && ! s6-setuidgid ubuntu git config --global --get-regexp 'credential\..*\.helper' > /dev/null 2>&1 ; then
+    s6-setuidgid ubuntu gh auth setup-git || echo "sleipnir: gh auth setup-git failed; git over HTTPS will not authenticate" >&2
+fi
