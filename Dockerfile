@@ -301,8 +301,8 @@ RUN set -eu ; \
  && for binary in code herdr moshi-hook tailscale tailscaled uv uvx ; do \
         if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
     done \
- && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
-    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
+ && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/npm /usr/local/npm/bin /usr/local/npm/lib /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
+    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
     for binary in agy bun cc claude code codex composer copilot cargo deno gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
@@ -321,7 +321,7 @@ COPY rootfs/ /
 ENV HOME=/home/ubuntu
 ENV LANG=C.utf8
 ENV LC_ALL=C.utf8
-ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
+ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV SHELL=/usr/bin/zsh
 
 ENV CARGO_HOME=/usr/local/cargo
@@ -329,6 +329,7 @@ ENV GOPATH=/opt/go
 ENV GOROOT=/usr/local/go
 
 ENV HERDR_STARTUP_CWD=/workspace
+ENV NPM_CONFIG_PREFIX=/usr/local/npm
 ENV S6_KEEP_ENV=1
 ENV TS_STATE_DIR=/var/lib/tailscale
 ENV UV_TOOL_BIN_DIR=/usr/local/uv/bin

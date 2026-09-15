@@ -2,6 +2,9 @@
 
 for DIRECTORY in \
     /home/ubuntu/.agents \
+    /home/ubuntu/.cache \
+    /home/ubuntu/.cache/copilot \
+    /home/ubuntu/.cache/uv \
     /home/ubuntu/.claude \
     /home/ubuntu/.codex \
     /home/ubuntu/.config \
@@ -14,12 +17,23 @@ for DIRECTORY in \
     /home/ubuntu/.local \
     /home/ubuntu/.local/bin \
     /home/ubuntu/.local/share \
+    /home/ubuntu/.local/share/claude \
     /home/ubuntu/.local/share/opencode \
+    /home/ubuntu/.local/share/uv \
     /home/ubuntu/.local/state \
+    /home/ubuntu/.local/state/gh \
+    /home/ubuntu/.local/state/herdr \
     /home/ubuntu/.local/state/moshi \
+    /home/ubuntu/.local/state/opencode \
     /home/ubuntu/.vscode-cli \
     /home/ubuntu/.vscode-server \
     /run/tailscale \
+    /usr/local/npm \
+    /usr/local/npm/bin \
+    /usr/local/npm/lib \
+    /usr/local/uv \
+    /usr/local/uv/bin \
+    /usr/local/uv/tools \
     /var/lib/tailscale \
     /workspace
 do
