@@ -1,5 +1,4 @@
 ARG COMPOSER_VERSION=2.10.3
-ARG BUILDKIT_VERSION=0.33.0
 ARG UBUNTU_VERSION=26.04
 ARG UV_VERSION=0.12.11
 
@@ -101,7 +100,21 @@ RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/
 
 FROM composer/composer:${COMPOSER_VERSION}-bin AS composer
 
-FROM moby/buildkit:v${BUILDKIT_VERSION} AS buildkit
+FROM installer AS docker-cli
+
+ARG DOCKER_VERSION=29.8.1
+ARG DOCKER_BUILDX_VERSION=latest
+ARG DOCKER_COMPOSE_VERSION=latest
+
+ENV _REMOTE_USER=ubuntu
+
+COPY --from=devcontainers /tmp/devcontainers/features/docker /tmp/devcontainers/features/docker
+
+RUN VERSION="${DOCKER_VERSION}" \
+    BUILDX="${DOCKER_BUILDX_VERSION}" \
+    COMPOSE="${DOCKER_COMPOSE_VERSION}" \
+    SOCKETUSER=root \
+    bash /tmp/devcontainers/features/docker/install.sh
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
@@ -279,7 +292,8 @@ COPY --from=s6 /opt/s6/ /
 COPY --from=tailscale /opt/tailscale/ /
 COPY --from=vscode /opt/vscode/ /
 COPY --from=composer /composer /usr/local/bin/composer
-COPY --from=buildkit /usr/bin/buildctl /usr/local/bin/buildctl
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/ /usr/local/libexec/docker/cli-plugins/
 COPY --from=github-cli /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
 COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
@@ -308,10 +322,12 @@ RUN set -eu ; \
  && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/npm /usr/local/npm/bin /usr/local/npm/lib /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
     export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
-    for binary in agy buildctl bun cc claude code codex composer copilot cargo deno gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
+    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
     done ; \
     if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \
+    docker buildx version > /dev/null ; \
+    docker compose version > /dev/null ; \
     echo "all expected binaries present" \
  && printf 'ubuntu ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/ubuntu \
  && chmod 0440 /etc/sudoers.d/ubuntu \
@@ -322,16 +338,15 @@ RUN set -eu ; \
 
 COPY rootfs/ /
 
-RUN command -v sleipnir-build > /dev/null
-
 ENV HOME=/home/ubuntu
 ENV LANG=C.utf8
 ENV LC_ALL=C.utf8
 ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV SHELL=/usr/bin/zsh
 
-ENV BUILDKIT_HOST=unix:///run/buildkit/buildkitd.sock
 ENV CARGO_HOME=/usr/local/cargo
+ENV DOCKER_BUILDKIT=1
+ENV DOCKER_HOST=unix:///run/docker/docker.sock
 ENV GOPATH=/opt/go
 ENV GOROOT=/usr/local/go
 

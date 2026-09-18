@@ -40,26 +40,57 @@ The three `rc-*` services exist so the agent CLIs own mobile apps keep working. 
 
 Beyond the language toolchains the image carries the things an agent reaches for when a repository does not build on the first try: `uv`/`uvx`, `build-essential`, `git`, `jq`, `ripgrep`, `vim`, `curl`, `wget`, `zip`/`unzip`, and `sudo`. `ubuntu` has passwordless sudo — s6 already supervises as root and drops each service with `s6-setuidgid`, so this grants a herdr pane nothing the supervision tree did not already have.
 
-## Building Dockerfiles
+## Docker sidecar
 
-The image includes the BuildKit client and a small `sleipnir-build` wrapper. It connects to the rootless BuildKit sidecar selected by `BUILDKIT_HOST`; no Docker daemon or Kubernetes node runtime socket runs inside Sleipnir.
-
-By default a build is fully executed and its result remains only in BuildKit's cache:
+The image includes Docker CLI 29.8.1, Buildx, and Compose, but no Docker daemon. It expects a per-pod `docker:29.8.1-dind-rootless` sidecar and connects through the Unix socket at `/run/docker/docker.sock`. The agent can use the normal workflow without pushing an intermediate image:
 
 ```sh
-sleipnir-build .
+docker build -t app:test .
+docker run --rm app:test
+docker compose up -d
 ```
 
-Export an OCI image archive when the result itself needs inspection, or push a temporary tag for a runtime smoke test:
+Mount the same socket `emptyDir` at `/run/user/1000` in the sidecar and `/run/docker` in Sleipnir. Mount the workspace at `/workspace` in both containers too: bind-mount source paths are resolved by the daemon, so `docker run -v "$PWD:/app" ...` only works when both containers see the same absolute path.
 
-```sh
-sleipnir-build --oci /tmp/image.tar .
-sleipnir-build --push ghcr.io/example/project:verify .
+The daemon data directory `/home/rootless/.local/share/docker` should use a size-limited local `emptyDir`. Do not put Docker's graph data on the shared CephFS workspace or another network filesystem. Losing this volume on pod replacement is intentional: repositories remain on their own volume, while containers, images, and build cache are disposable.
+
+Run the sidecar with an explicit Unix-only host:
+
+```yaml
+securityContext:
+  fsGroup: 1000
+containers:
+- name: docker
+  image: docker:29.8.1-dind-rootless
+  command:
+  - dockerd-rootless.sh
+  args:
+  - --host=unix:///run/user/1000/docker.sock
+  securityContext:
+    privileged: true
+    runAsUser: 1000
+    runAsGroup: 1000
+  readinessProbe:
+    exec:
+      command: [docker, --host, unix:///run/user/1000/docker.sock, info]
+  volumeMounts:
+  - name: docker-socket
+    mountPath: /run/user/1000
+  - name: docker-data
+    mountPath: /home/rootless/.local/share/docker
+  - name: workspace
+    mountPath: /workspace
+volumes:
+- name: docker-socket
+  emptyDir: {}
+- name: docker-data
+  emptyDir:
+    sizeLimit: 20Gi
 ```
 
-The wrapper also accepts `--file`, `--platform`, `--target`, and `--no-cache`. Options after `--` are passed to `buildctl build`, for example `sleipnir-build -- --opt build-arg:VERSION=1.2.3`.
+Add the matching `docker-socket` and `workspace` mounts to the Sleipnir container. The explicit `dockerd-rootless.sh` command bypasses the official DinD entrypoint's automatic TCP listener; do not replace it with the default entrypoint, expose port 2375, or mount the Kubernetes node's Docker/containerd socket.
 
-The expected pod contract is a BuildKit socket at `/run/buildkit/buildkitd.sock`, normally shared with a per-pod `moby/buildkit:<version>-rootless` sidecar through an `emptyDir`. Set `BUILDKIT_HOST` to use a different Unix socket or an authenticated remote service. Never expose an unauthenticated BuildKit TCP endpoint: Dockerfile build steps may be able to connect back to it.
+Docker-in-Docker requires `privileged`, including the rootless variant. Treat each Sleipnir pod as a trusted development worker, apply CPU, memory, PID, and ephemeral-storage limits, and schedule it on a dedicated node pool when repositories are not fully trusted. Rootless dockerd reduces the privileges of nested containers, but it does not remove the outer sidecar's Kubernetes privilege boundary.
 
 Each language also needs the thing that actually installs its dependencies, otherwise the toolchain cannot check out a repository and build it:
 
