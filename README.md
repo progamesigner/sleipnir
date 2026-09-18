@@ -40,6 +40,27 @@ The three `rc-*` services exist so the agent CLIs own mobile apps keep working. 
 
 Beyond the language toolchains the image carries the things an agent reaches for when a repository does not build on the first try: `uv`/`uvx`, `build-essential`, `git`, `jq`, `ripgrep`, `vim`, `curl`, `wget`, `zip`/`unzip`, and `sudo`. `ubuntu` has passwordless sudo — s6 already supervises as root and drops each service with `s6-setuidgid`, so this grants a herdr pane nothing the supervision tree did not already have.
 
+## Building Dockerfiles
+
+The image includes the BuildKit client and a small `sleipnir-build` wrapper. It connects to the rootless BuildKit sidecar selected by `BUILDKIT_HOST`; no Docker daemon or Kubernetes node runtime socket runs inside Sleipnir.
+
+By default a build is fully executed and its result remains only in BuildKit's cache:
+
+```sh
+sleipnir-build .
+```
+
+Export an OCI image archive when the result itself needs inspection, or push a temporary tag for a runtime smoke test:
+
+```sh
+sleipnir-build --oci /tmp/image.tar .
+sleipnir-build --push ghcr.io/example/project:verify .
+```
+
+The wrapper also accepts `--file`, `--platform`, `--target`, and `--no-cache`. Options after `--` are passed to `buildctl build`, for example `sleipnir-build -- --opt build-arg:VERSION=1.2.3`.
+
+The expected pod contract is a BuildKit socket at `/run/buildkit/buildkitd.sock`, normally shared with a per-pod `moby/buildkit:<version>-rootless` sidecar through an `emptyDir`. Set `BUILDKIT_HOST` to use a different Unix socket or an authenticated remote service. Never expose an unauthenticated BuildKit TCP endpoint: Dockerfile build steps may be able to connect back to it.
+
 Each language also needs the thing that actually installs its dependencies, otherwise the toolchain cannot check out a repository and build it:
 
 | Language | Installer | How it gets in |
