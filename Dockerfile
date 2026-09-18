@@ -258,6 +258,7 @@ RUN apt-get update \
         libsodium23 \
         libxml2-16 \
         locales \
+        mosh \
         openssh-client \
         procps \
         python3 \
@@ -343,6 +344,8 @@ ENV SLEIPNIR_ENABLE_RC_AGY=0
 ENV SLEIPNIR_ENABLE_RC_CLAUDE=0
 ENV SLEIPNIR_ENABLE_RC_CODEX=0
 ENV SLEIPNIR_ENABLE_TAILSCALE=0
+
+ENV SLEIPNIR_TAILSCALE_TUN=tailscale0
 
 EXPOSE 24544
 

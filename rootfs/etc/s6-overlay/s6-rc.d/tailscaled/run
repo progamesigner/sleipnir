@@ -7,4 +7,4 @@ exec s6-setuidgid ubuntu tailscaled \
     --socket=/run/tailscale/tailscaled.sock \
     --socks5-server=localhost:1055 \
     --statedir="${TS_STATE_DIR:-/var/lib/tailscale}" \
-    --tun=userspace-networking
+    --tun="${SLEIPNIR_TAILSCALE_TUN:-tailscale0}"
