@@ -45,6 +45,16 @@ RUN case "${TARGETARCH}" in \
  && tar -C /opt/s6 -Jxpf /tmp/s6-arch.tar.xz \
  && rm -f /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz
 
+FROM fetcher AS supercronic
+
+ARG TARGETARCH
+
+ARG SUPERCRONIC_VERSION=0.2.49
+
+RUN curl -fsSL -o /tmp/supercronic https://github.com/aptible/supercronic/releases/download/v${SUPERCRONIC_VERSION}/supercronic-linux-${TARGETARCH} \
+ && install -m 0755 /tmp/supercronic /supercronic \
+ && rm -f /tmp/supercronic
+
 FROM fetcher AS tailscale
 
 ARG TARGETARCH
@@ -58,7 +68,9 @@ RUN mkdir -p /opt/tailscale/usr/local/bin \
  && rm -f /tmp/tailscale.tgz /tmp/tailscale /tmp/tailscaled
 
 FROM fetcher AS vscode
+
 ARG TARGETARCH
+
 RUN case "${TARGETARCH}" in \
         amd64) CODE_ARCH=x64 ;; \
         arm64) CODE_ARCH=arm64 ;; \
@@ -68,27 +80,11 @@ RUN case "${TARGETARCH}" in \
  && tar -C /opt/vscode/usr/local/bin -xzf /tmp/code.tgz \
  && rm -f /tmp/code.tgz
 
-FROM installer AS herdr
-
-ARG HERDR_VERSION=latest
-
-COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/features/herdr
-
-RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
-
 FROM installer AS devtools
 
 COPY --from=devcontainers /tmp/devcontainers/features/devtools /tmp/devcontainers/features/devtools
 
 RUN CLOUDFLARED=none COSIGN=latest TAILSCALE=none bash /tmp/devcontainers/features/devtools/install.sh
-
-FROM installer AS moshi
-
-ARG MOSHI_VERSION=latest
-
-COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/features/moshi
-
-RUN VERSION="${MOSHI_VERSION}" BRIDGE=false CLIPBOARD=false bash /tmp/devcontainers/features/moshi/install.sh
 
 FROM installer AS github-cli
 
@@ -97,6 +93,22 @@ ARG GITHUB_CLI_VERSION=latest
 COPY --from=devcontainers /tmp/devcontainers/features/github-cli /tmp/devcontainers/features/github-cli
 
 RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/install.sh
+
+FROM installer AS herdr
+
+ARG HERDR_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/features/herdr
+
+RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
+
+FROM installer AS moshi
+
+ARG MOSHI_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/features/moshi
+
+RUN VERSION="${MOSHI_VERSION}" BRIDGE=false CLIPBOARD=false bash /tmp/devcontainers/features/moshi/install.sh
 
 FROM composer/composer:${COMPOSER_VERSION}-bin AS composer
 
@@ -280,6 +292,7 @@ COPY --from=composer /composer /usr/local/bin/composer
 COPY --from=github-cli /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
 COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
+COPY --from=supercronic /supercronic /usr/local/bin/supercronic
 COPY --from=uv /uv /uvx /usr/local/bin/
 COPY --from=lang-bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=lang-deno /usr/local/bin/deno /usr/local/bin/deno
@@ -343,7 +356,11 @@ ENV SLEIPNIR_ENABLE_MOSHI=1
 ENV SLEIPNIR_ENABLE_RC_AGY=0
 ENV SLEIPNIR_ENABLE_RC_CLAUDE=0
 ENV SLEIPNIR_ENABLE_RC_CODEX=0
+ENV SLEIPNIR_ENABLE_SCHEDULER=0
 ENV SLEIPNIR_ENABLE_TAILSCALE=0
+
+ENV SLEIPNIR_SCHEDULER_CRONTAB=/etc/sleipnir/scheduler/crontab
+ENV SLEIPNIR_SCHEDULER_WORKDIR=/home/ubuntu
 
 ENV SLEIPNIR_TAILSCALE_TUN=tailscale0
 

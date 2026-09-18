@@ -19,6 +19,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | `rc-claude` | longrun | `SLEIPNIR_ENABLE_RC_CLAUDE` (default 0) | s6 restarts it |
 | `rc-claude-log` | longrun | always; logger for `rc-claude` | s6 restarts it |
 | `rc-codex` | longrun | `SLEIPNIR_ENABLE_RC_CODEX` (default 0) | s6 restarts it |
+| `scheduler` | longrun | `SLEIPNIR_ENABLE_SCHEDULER` (default 0) | s6 restarts it |
 
 Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tree runs as root, which is s6-overlay's normal arrangement.
 
@@ -31,6 +32,11 @@ Its status screen redraws about once a second, and with no TTY under s6 every re
 `rc-agy` needs a detour. On Linux `agy remote-control start` writes a systemd user unit and hands it to `systemctl --user`, which cannot work here: there is no systemd and no session bus, so it fails at `daemon-reload`. The unit it writes points at `agy remote-control serve`, an undocumented foreground subcommand, and that is what the service runs directly under s6 — no systemd involved. The rest of the unit's semantics move into the service directory: `finish` stops the service for good on exit 3 (the unit's `RestartPreventExitStatus`) and otherwise sleeps 10s before s6 restarts it (`RestartSec`), with `timeout-finish` raised to 15s so that sleep survives. The sleep is skipped when the service is being stopped on purpose, so shutting the container down does not wait on it. The name shown in Antigravity Remote Control is set once with `agy remote-control start --name <name>` — it records the name before the systemd step fails — and persists in `~/.gemini/config/config.json`, which is on a PVC.
 
 The three `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it shares the same `~/.claude`, `~/.codex` or `~/.gemini`, but it is not in a pane, so neither herdr nor Moshi can see it. That is expected.
+
+
+`scheduler` runs a user-authored crontab with [Supercronic](https://github.com/aptible/supercronic). Supercronic fits the container better than `cron` or a systemd timer: PID 1 is `s6-svscan`, systemd is offline, and Supercronic is one static binary that logs to stdout without needing root or setuid. The service validates the crontab, drops to `ubuntu`, and watches the file for changes, including Kubernetes ConfigMap atomic updates.
+
+The default crontab is `/etc/sleipnir/scheduler/crontab`; override it with `SLEIPNIR_SCHEDULER_CRONTAB`. One file can hold any number of jobs and may set `CRON_TZ` itself. Commands should use absolute paths. They start in `/home/ubuntu` unless `SLEIPNIR_SCHEDULER_WORKDIR` says otherwise. A missing or empty crontab brings the service down cleanly because having nothing scheduled is a normal state.
 
 ## Agent CLIs
 
@@ -79,7 +85,9 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `CODE_TUNNEL_NAME` | `sleipnir` | Name shown in vscode.dev. The CLI lowercases the name and accepts only letters, digits and `-`, up to 20 characters, so an uppercase value registers lowercased. |
 | `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. It is also passed as the session name prefix; without it the prefix falls back to the hostname, which under Kubernetes is the pod name unless the pod sets `hostname`. |
 | `HERDR_STARTUP_CWD` | `/workspace` | herdr seeds an initial shell pane here. |
-
+| `SLEIPNIR_ENABLE_SCHEDULER` | `0` | Set to `1` to run the scheduler. |
+| `SLEIPNIR_SCHEDULER_CRONTAB` | `/etc/sleipnir/scheduler/crontab` | Authored crontab to validate, watch and run. Mount a file here or point to another path. |
+| `SLEIPNIR_SCHEDULER_WORKDIR` | `/home/ubuntu` | Working directory inherited by scheduled commands. Prefer absolute command paths in the crontab. |
 ### Tailscale
 
 Runs in userspace networking mode, which needs no `NET_ADMIN` and no `/dev/net/tun`. Verified as uid 1000 with an empty capability set: the daemon comes up, `--ssh` is accepted, host keys are generated, inbound SSH reaches the policy check, and `tailscale serve` proxies a TCP port.

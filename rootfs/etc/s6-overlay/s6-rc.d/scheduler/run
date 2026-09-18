@@ -1,0 +1,18 @@
+#!/command/with-contenv sh
+
+[ "${SLEIPNIR_ENABLE_SCHEDULER:-0}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+
+CRONTAB="${SLEIPNIR_SCHEDULER_CRONTAB:-/etc/sleipnir/scheduler/crontab}"
+WORKDIR="${SLEIPNIR_SCHEDULER_WORKDIR:-/home/ubuntu}"
+
+[ -s "${CRONTAB}" ] || { s6-svc -O . ; exit 0 ; }
+
+if ! s6-setuidgid ubuntu supercronic -test "${CRONTAB}" ; then
+    echo "scheduler: invalid crontab: ${CRONTAB}" >&2
+    s6-svc -O .
+    exit 0
+fi
+
+cd "${WORKDIR}" || exit 1
+
+exec s6-setuidgid ubuntu supercronic -inotify -passthrough-logs "${CRONTAB}"
