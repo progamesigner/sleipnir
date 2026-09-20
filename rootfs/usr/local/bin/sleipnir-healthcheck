@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -euo pipefail
+
+fail() {
+    echo "sleipnir-healthcheck: $*" >&2
+    exit 1
+}
+
+if [[ $# != 1 || ( $1 != live && $1 != ready ) ]]; then
+    echo 'usage: sleipnir-healthcheck live|ready' >&2
+    exit 2
+fi
+mode=$1
+
+check_service() {
+    local up
+    up=$(/usr/bin/timeout --kill-after=1s 1s /command/s6-svstat -o up "/run/service/$1") || fail "$1 supervisor check failed"
+    [[ $up == true ]] || fail "$1 is down"
+}
+
+if [[ ${SLEIPNIR_ENABLE_HERDR:-1} == 1 ]]; then
+    check_service herdr
+fi
+
+if [[ ${SLEIPNIR_ENABLE_MOSHI:-1} == 1 ]]; then
+    check_service moshi
+    listen=${MOSHI_LISTEN:-0.0.0.0:24544}
+    host=${listen%:*}
+    port=${listen##*:}
+    host=${host#\[}
+    host=${host%\]}
+    case $host in
+        ''|0.0.0.0) host=127.0.0.1 ;;
+        ::) host=::1 ;;
+    esac
+    [[ $port =~ ^[0-9]{1,5}$ ]] && (( 10#$port > 0 && 10#$port <= 65535 )) || fail 'invalid Moshi port'
+    /usr/bin/timeout --kill-after=1s 2s /bin/bash --noprofile --norc -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" || fail 'Moshi listener is unavailable'
+fi
+
+if [[ ${SLEIPNIR_ENABLE_TAILSCALE:-0} == 1 ]]; then
+    check_service tailscaled
+    status=$(/usr/bin/curl -q --silent --show-error --fail --noproxy '*' --max-time 3 --unix-socket /run/tailscale/tailscaled.sock 'http://local-tailscaled.sock/localapi/v0/status?peers=false') || fail 'Tailscale LocalAPI is unavailable'
+    /usr/bin/jq -e 'type == "object" and (.BackendState | type == "string")' <<< "$status" > /dev/null 2>&1 || fail 'invalid Tailscale status'
+    if [[ $mode == ready ]]; then
+        /usr/bin/jq -e '.BackendState == "Running" and (.TailscaleIPs | type == "array" and length > 0)' <<< "$status" > /dev/null 2>&1 || fail 'Tailscale is not ready'
+    fi
+fi

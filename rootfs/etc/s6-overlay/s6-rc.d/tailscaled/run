@@ -2,6 +2,9 @@
 
 [ "${SLEIPNIR_ENABLE_TAILSCALE:-0}" = "1" ] || { s6-svc -O . ; exit 0 ; }
 
+export TS_LOGS_DIR="${TS_LOGS_DIR:-/run/tailscale/logs}"
+install -d -o ubuntu -g ubuntu -m 0700 "${TS_LOGS_DIR}" || exit 1
+
 exec s6-setuidgid ubuntu tailscaled \
     --outbound-http-proxy-listen=localhost:1056 \
     --socket=/run/tailscale/tailscaled.sock \

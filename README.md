@@ -90,6 +90,48 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `SLEIPNIR_SCHEDULER_WORKDIR` | `/home/ubuntu` | Working directory inherited by scheduled commands. Prefer absolute command paths in the crontab. |
 ### Tailscale
 
+`tailscaled` keeps its identity and SSH host keys in `TS_STATE_DIR` (default
+`/var/lib/tailscale`). Its disposable log spool uses `TS_LOGS_DIR` (default
+`/run/tailscale/logs`), created with ownership for `ubuntu` before the daemon
+starts. Keep that directory on local storage: synchronous log rotation on a
+network filesystem can block logging and operations holding backend locks.
+Pending uploaded logs and the log ID may be lost on container replacement;
+the Tailscale node identity stays on the persistent volume.
+
+### Health checks and recovery
+
+`/usr/local/bin/sleipnir-healthcheck` uses Bash, coreutils, curl and jq already
+in the image; it needs no Python runtime. Its `live` mode checks s6 process status
+for enabled Herdr, Moshi and Tailscale services, connects to the configured Moshi listener,
+and queries Tailscale's LocalAPI with a 3-second request deadline. Each check is
+bounded; allow 10 seconds for the Kubernetes exec probe. Disabled services are
+skipped. This catches an unresponsive daemon even when its PID and socket remain.
+
+`sleipnir-healthcheck ready` additionally requires Tailscale's `Running` state
+and an assigned address. Login or device approval failures leave the container
+alive but not ready. Neither probe depends on a public service or a particular
+peer, so an upstream outage does not directly cause a restart loop. These are
+local checks; they do not prove that tailnet routing, ACLs, SSH or a complete
+Moshi session works. Monitor those from another tailnet node separately.
+
+Use `live` for startup (10-second interval, 30 failures) and liveness (30-second
+interval, 3 failures), and `ready` for readiness (10-second interval, 2 failures).
+On an unexpected Tailscale or Herdr exit, the finish script records a nonzero
+exit code and invokes s6-overlay's `halt` entrypoint for an orderly container
+shutdown. Kubernetes then restarts the container. A liveness failure provides
+a fallback if shutdown or a service hangs; recovery interrupts in-memory agent
+sessions. An uninterruptible kernel I/O wait can still require storage/node repair.
+
+Publish the image containing the healthcheck and update the manifests image pin
+before enabling these probes.
+
+Run the health and finish regression tests with
+`python3 -m unittest discover -s tests -v`. They include real Unix-socket HTTP
+success, failure and timeout cases; full s6/container lifecycle validation still
+requires a container runtime.
+
+### Tailscale networking
+
 Runs in userspace networking mode, which needs no `NET_ADMIN` and no `/dev/net/tun`. Verified as uid 1000 with an empty capability set: the daemon comes up, `--ssh` is accepted, host keys are generated, inbound SSH reaches the policy check, and `tailscale serve` proxies a TCP port.
 
 Two consequences of userspace mode, neither of which this pod runs into:

@@ -2,4 +2,8 @@
 
 [ "${SLEIPNIR_ENABLE_HERDR:-1}" = "1" ] || exit 0
 
-exec s6-svscanctl -t /run/service
+[ "$(s6-svstat -o wantedup .)" = "true" ] || exit 0
+
+echo "sleipnir: herdr exited (status=$1 signal=$2); stopping container" >&2
+echo 1 > /run/s6-linux-init-container-results/exitcode
+exec /run/s6/basedir/bin/halt
