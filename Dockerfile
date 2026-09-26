@@ -1,10 +1,10 @@
-ARG COMPOSER_VERSION=2.10.3
-ARG UBUNTU_VERSION=26.04
-ARG UV_VERSION=0.12.11
+ARG COMPOSER_VERSION=latest
+ARG UBUNTU_VERSION=latest
+ARG UV_VERSION=latest
 
 FROM ubuntu:${UBUNTU_VERSION} AS devcontainers
 
-ARG DEVCONTAINERS_REF=c0592dab9947bdf971e6bb02c6328609bb1eef1b
+ARG DEVCONTAINERS_REF=main
 
 RUN apt-get update \
  && apt-get install --no-install-recommends --yes ca-certificates git \
@@ -30,7 +30,7 @@ FROM fetcher AS s6
 
 ARG TARGETARCH
 
-ARG S6_OVERLAY_VERSION=3.2.1.0
+ARG S6_OVERLAY_VERSION=none
 
 RUN case "${TARGETARCH}" in \
         amd64) S6_ARCH=x86_64 ;; \
@@ -48,7 +48,7 @@ FROM fetcher AS supercronic
 
 ARG TARGETARCH
 
-ARG SUPERCRONIC_VERSION=0.2.49
+ARG SUPERCRONIC_VERSION=none
 
 RUN curl -fsSL -o /tmp/supercronic https://github.com/aptible/supercronic/releases/download/v${SUPERCRONIC_VERSION}/supercronic-linux-${TARGETARCH} \
  && install -m 0755 /tmp/supercronic /supercronic \
@@ -58,7 +58,7 @@ FROM fetcher AS tailscale
 
 ARG TARGETARCH
 
-ARG TAILSCALE_VERSION=1.102.3
+ARG TAILSCALE_VERSION=none
 
 RUN mkdir -p /opt/tailscale/usr/local/bin \
  && curl -fsSL -o /tmp/tailscale.tgz https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}.tgz \
@@ -68,6 +68,7 @@ RUN mkdir -p /opt/tailscale/usr/local/bin \
 
 FROM fetcher AS vscode
 
+ARG VSCODE_COMMIT=latest
 ARG TARGETARCH
 
 RUN case "${TARGETARCH}" in \
@@ -75,19 +76,27 @@ RUN case "${TARGETARCH}" in \
         arm64) CODE_ARCH=arm64 ;; \
     esac \
  && mkdir -p /opt/vscode/usr/local/bin \
- && curl -fsSL -o /tmp/code.tgz https://update.code.visualstudio.com/latest/cli-linux-${CODE_ARCH}/stable \
+ && case "${VSCODE_COMMIT}" in \
+        latest) CODE_RELEASE=latest ;; \
+        *) CODE_RELEASE=commit:${VSCODE_COMMIT} ;; \
+    esac \
+ && curl -fsSL -o /tmp/code.tgz https://update.code.visualstudio.com/${CODE_RELEASE}/cli-linux-${CODE_ARCH}/stable \
  && tar -C /opt/vscode/usr/local/bin -xzf /tmp/code.tgz \
  && rm -f /tmp/code.tgz
 
 FROM installer AS devtools
 
+ARG DEVTOOLS_COSIGN_VERSION=latest
+ARG DEVTOOLS_CLOUDFLARED_VERSION=none
+ARG DEVTOOLS_TAILSCALE_VERSION=none
+
 COPY --from=devcontainers /tmp/devcontainers/features/devtools /tmp/devcontainers/features/devtools
 
-RUN CLOUDFLARED=none COSIGN=latest TAILSCALE=none bash /tmp/devcontainers/features/devtools/install.sh
+RUN CLOUDFLARED="${DEVTOOLS_CLOUDFLARED_VERSION}" COSIGN="${DEVTOOLS_COSIGN_VERSION}" TAILSCALE="${DEVTOOLS_TAILSCALE_VERSION}" bash /tmp/devcontainers/features/devtools/install.sh
 
 FROM installer AS github-cli
 
-ARG GITHUB_CLI_VERSION=2.101.0
+ARG GITHUB_CLI_VERSION=latest
 
 COPY --from=devcontainers /tmp/devcontainers/features/github-cli /tmp/devcontainers/features/github-cli
 
@@ -95,7 +104,7 @@ RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/
 
 FROM installer AS herdr
 
-ARG HERDR_VERSION=0.9.1
+ARG HERDR_VERSION=latest
 
 COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/features/herdr
 
@@ -103,7 +112,7 @@ RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/her
 
 FROM installer AS moshi
 
-ARG MOSHI_VERSION=0.4.1
+ARG MOSHI_VERSION=latest
 
 COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/features/moshi
 
@@ -113,7 +122,7 @@ FROM composer/composer:${COMPOSER_VERSION}-bin AS composer
 
 FROM installer AS docker-cli
 
-ARG DOCKER_VERSION=29.8.1
+ARG DOCKER_VERSION=latest
 ARG DOCKER_BUILDX_VERSION=latest
 ARG DOCKER_COMPOSE_VERSION=latest
 
@@ -131,7 +140,7 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM installer AS lang-bun
 
-ARG BUN_VERSION=1.4.2
+ARG BUN_VERSION=latest
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -142,7 +151,7 @@ RUN VERSION="${BUN_VERSION}" bash /tmp/devcontainers/features/bun/install.sh
 
 FROM installer AS lang-deno
 
-ARG DENO_VERSION=2.9.5
+ARG DENO_VERSION=latest
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -153,7 +162,7 @@ RUN VERSION="${DENO_VERSION}" bash /tmp/devcontainers/features/deno/install.sh
 
 FROM installer AS lang-go
 
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=none
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -167,7 +176,7 @@ RUN sed -i \
 
 FROM installer AS lang-node
 
-ARG NODE_VERSION=24.20.0
+ARG NODE_VERSION=none
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -178,7 +187,7 @@ RUN VERSION="${NODE_VERSION}" bash /tmp/devcontainers/features/node/install.sh
 
 FROM installer AS lang-php
 
-ARG PHP_VERSION=8.5.9
+ARG PHP_VERSION=none
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -194,7 +203,7 @@ RUN sed -i \
 
 FROM installer AS lang-python
 
-ARG PYTHON_VERSION=3.14.7
+ARG PYTHON_VERSION=none
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -208,7 +217,7 @@ RUN sed -i \
 
 FROM installer AS lang-rust
 
-ARG RUST_VERSION=1.98.1
+ARG RUST_VERSION=none
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -230,7 +239,7 @@ RUN VERSION="${ANTIGRAVITY_CLI_VERSION}" bash /tmp/devcontainers/features/antigr
 
 FROM installer AS agent-copilot
 
-ARG COPILOT_VERSION=1.0.88
+ARG COPILOT_VERSION=latest
 
 COPY --from=devcontainers /tmp/devcontainers/features/copilot-cli /tmp/devcontainers/features/copilot-cli
 
@@ -238,7 +247,7 @@ RUN VERSION="${COPILOT_VERSION}" bash /tmp/devcontainers/features/copilot-cli/in
 
 FROM installer AS agent-opencode
 
-ARG OPENCODE_VERSION=1.18.32
+ARG OPENCODE_VERSION=latest
 
 COPY --from=devcontainers /tmp/devcontainers/features/opencode /tmp/devcontainers/features/opencode
 
@@ -246,15 +255,19 @@ RUN VERSION="${OPENCODE_VERSION}" bash /tmp/devcontainers/features/opencode/inst
 
 FROM installer AS agent-claude-code
 
+ARG CLAUDE_CODE_VERSION=latest
+
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
 COPY --from=lang-node /usr/local/ /usr/local/
 COPY --from=devcontainers /tmp/devcontainers/features/claude-code /tmp/devcontainers/features/claude-code
 
-RUN bash /tmp/devcontainers/features/claude-code/install.sh
+RUN VERSION="${CLAUDE_CODE_VERSION}" bash /tmp/devcontainers/features/claude-code/install.sh
 
 FROM installer AS agent-codex
+
+ARG CODEX_VERSION=latest
 
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
@@ -262,7 +275,7 @@ ENV _REMOTE_USER_HOME=/home/ubuntu
 COPY --from=lang-node /usr/local/ /usr/local/
 COPY --from=devcontainers /tmp/devcontainers/features/codex /tmp/devcontainers/features/codex
 
-RUN bash /tmp/devcontainers/features/codex/install.sh
+RUN VERSION="${CODEX_VERSION}" bash /tmp/devcontainers/features/codex/install.sh
 
 FROM devtools
 

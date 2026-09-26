@@ -249,8 +249,16 @@ Nothing is logged in yet, and that is fine: Herdr and Moshi come up on their own
 
 ## Building
 
-```sh
-docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/progamesigner/sleipnir:latest .
+`versions` contains build selections as plain `KEY=VALUE` entries, without quotes, comments, or shell expressions. The publish workflow passes the file contents directly to the build action. Dockerfile defaults use `latest`, `main`, or `none` where supported; `none` on a direct-download stage is an unset marker and does not produce a complete image. Python source verification uses the cosign version default provided by the pinned devcontainers installer. Published builds use the selections in `versions`, including a fixed VS Code commit. Agent selectors remain `latest`, and the publish workflow rebuilds their stages without cache.
+
+For a local build, use Bash to pass the same file without evaluating it as shell code:
+
+```bash
+build_args=()
+while IFS= read -r selection || [[ -n "$selection" ]]; do
+    build_args+=(--build-arg "$selection")
+done < versions
+docker buildx build "${build_args[@]}" --platform linux/amd64,linux/arm64 -t ghcr.io/progamesigner/sleipnir:latest .
 ```
 
 Release assets disagree about how to spell an architecture, so the Dockerfile maps `TARGETARCH` per tool: s6-overlay wants `x86_64`/`aarch64`, Tailscale takes `amd64`/`arm64` unchanged, the VS Code CLI wants `x64`/`arm64`, and inside the feature installers herdr uses `aarch64` where moshi-hook uses `arm64`.
