@@ -4,16 +4,15 @@ ARG UV_VERSION=0.12.11
 
 FROM ubuntu:${UBUNTU_VERSION} AS devcontainers
 
-ARG DEVCONTAINERS_REF=main
+ARG DEVCONTAINERS_REF=c0592dab9947bdf971e6bb02c6328609bb1eef1b
 
 RUN apt-get update \
  && apt-get install --no-install-recommends --yes ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
 
-RUN git clone \
-    --depth=1 \
-    --branch="${DEVCONTAINERS_REF}" \
-    https://github.com/progamesigner/devcontainers.git /tmp/devcontainers
+RUN git init --quiet /tmp/devcontainers \
+ && git -C /tmp/devcontainers fetch --quiet --depth=1 https://github.com/progamesigner/devcontainers.git "${DEVCONTAINERS_REF}" \
+ && git -C /tmp/devcontainers checkout --quiet FETCH_HEAD
 
 FROM ubuntu:${UBUNTU_VERSION} AS fetcher
 
@@ -88,7 +87,7 @@ RUN CLOUDFLARED=none COSIGN=latest TAILSCALE=none bash /tmp/devcontainers/featur
 
 FROM installer AS github-cli
 
-ARG GITHUB_CLI_VERSION=latest
+ARG GITHUB_CLI_VERSION=2.101.0
 
 COPY --from=devcontainers /tmp/devcontainers/features/github-cli /tmp/devcontainers/features/github-cli
 
@@ -96,7 +95,7 @@ RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/
 
 FROM installer AS herdr
 
-ARG HERDR_VERSION=latest
+ARG HERDR_VERSION=0.9.1
 
 COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/features/herdr
 
@@ -104,7 +103,7 @@ RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/her
 
 FROM installer AS moshi
 
-ARG MOSHI_VERSION=latest
+ARG MOSHI_VERSION=0.4.1
 
 COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/features/moshi
 
@@ -231,7 +230,7 @@ RUN VERSION="${ANTIGRAVITY_CLI_VERSION}" bash /tmp/devcontainers/features/antigr
 
 FROM installer AS agent-copilot
 
-ARG COPILOT_VERSION=latest
+ARG COPILOT_VERSION=1.0.88
 
 COPY --from=devcontainers /tmp/devcontainers/features/copilot-cli /tmp/devcontainers/features/copilot-cli
 
@@ -239,7 +238,7 @@ RUN VERSION="${COPILOT_VERSION}" bash /tmp/devcontainers/features/copilot-cli/in
 
 FROM installer AS agent-opencode
 
-ARG OPENCODE_VERSION=latest
+ARG OPENCODE_VERSION=1.18.32
 
 COPY --from=devcontainers /tmp/devcontainers/features/opencode /tmp/devcontainers/features/opencode
 
