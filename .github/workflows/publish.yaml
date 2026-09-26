@@ -102,6 +102,6 @@ jobs:
           type=raw,value=${{ env.IMAGE_VERSION }}
     - working-directory: ${{ runner.temp }}/digests
       run: |
-        docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+        docker buildx imagetools create --annotation index:org.opencontainers.image.version=${IMAGE_VERSION} $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
     - run: |
         docker buildx imagetools inspect "$(jq -r '.tags[] | select(contains(":sha-"))' <<< "${DOCKER_METADATA_OUTPUT_JSON}")"
