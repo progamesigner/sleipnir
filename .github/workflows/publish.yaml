@@ -1,4 +1,4 @@
-name: Publish sleipnir image
+name: Publish Sleipnir image
 
 on:
   push:

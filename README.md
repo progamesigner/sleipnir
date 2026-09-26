@@ -264,3 +264,9 @@ docker buildx build "${build_args[@]}" --platform linux/amd64,linux/arm64 -t ghc
 Release assets disagree about how to spell an architecture, so the Dockerfile maps `TARGETARCH` per tool: s6-overlay wants `x86_64`/`aarch64`, Tailscale takes `amd64`/`arm64` unchanged, the VS Code CLI wants `x64`/`arm64`, and inside the feature installers herdr uses `aarch64` where moshi-hook uses `arm64`.
 
 Schedule the pods onto the x86 nodes. A Raspberry Pi will not carry multiple agent CLIs.
+
+### Dependency updates
+
+`update.yaml` checks stable upstream versions daily at 01:00 UTC and can also be run manually. It updates only `versions` and maintains one PR on `automation/update-versions`, using `github-actions[bot]` and verified commits. Review and merge the PR to trigger the existing image publication workflow; the updater never merges or deploys. Source lookup failures prevent all updates. Major upgrades are excluded, and runtime series are preserved. Agent entries set to `latest` remain unchanged.
+
+The PR includes a version table and upstream release notes, without AI inference. Allow GitHub Actions to create pull requests in the repository's Actions settings. If PR CI is added later, workflows triggered by PRs created with `GITHUB_TOKEN` require approval to run.
