@@ -40,7 +40,7 @@ The default crontab is `/etc/sleipnir/scheduler/crontab`; override it with `SLEI
 
 ## Agent CLIs
 
-`claude`, `codex`, `agy`, `copilot`, `opencode` — installed at build time from the same [progamesigner/devcontainers](https://github.com/progamesigner/devcontainers) feature installers the devcontainers use, so the versions and install paths stay consistent between the two. The image also includes the `devtools` feature (with cosign) and uses zsh as `ubuntu`’s login and interactive shell.
+`claude`, `codex`, `agy`, `copilot`, `opencode` — installed at build time from the same [progamesigner/devcontainers](https://github.com/progamesigner/devcontainers) feature installers the devcontainers use, so the versions and install paths stay consistent between the two. The image also includes kubectl, k9s, and the `devtools` feature (with cosign) and uses zsh as `ubuntu`’s login and interactive shell.
 
 `gh` comes from the same feature set. The agents lean on it for anything involving a pull request, and the pod mounts a PVC at `~/.config/gh` to keep the login, so it belongs in the image rather than in `~/.local/bin`.
 
@@ -270,3 +270,7 @@ Schedule the pods onto the x86 nodes. A Raspberry Pi will not carry multiple age
 `update.yaml` checks stable upstream versions daily at 01:00 UTC and can also be run manually. It updates only `versions` and maintains one PR on `automation/update-versions`, using `github-actions[bot]` and verified commits. Review and merge the PR to trigger the existing image publication workflow; the updater never merges or deploys. Source lookup failures prevent all updates. Major upgrades are excluded, and runtime series are preserved. Agent entries set to `latest` remain unchanged.
 
 The PR includes a version table and upstream release notes, without AI inference. Allow GitHub Actions to create pull requests in the repository's Actions settings. If PR CI is added later, workflows triggered by PRs created with `GITHUB_TOKEN` require approval to run.
+
+`KUBECTL_VERSION` pins the Kubernetes client. Dependency updates stay within its minor series; change the pin deliberately when upgrading the cluster. The Kubernetes installer verifies the official SHA256 checksum for both amd64 and arm64. Helm and Kustomize are disabled in this installer stage.
+
+`K9S_VERSION` pins k9s, with stable updates within its current major version. Both kubectl and k9s use `/home/ubuntu/.kube/config` (or `KUBECONFIG`). Mount a populated kubeconfig directory with referenced certificates or use a self-contained kubeconfig; exec-based authentication also requires its credential helper in the image.

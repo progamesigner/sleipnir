@@ -102,6 +102,22 @@ COPY --from=devcontainers /tmp/devcontainers/features/github-cli /tmp/devcontain
 
 RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/install.sh
 
+FROM installer AS kubectl
+
+ARG KUBECTL_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/kubernetes /tmp/devcontainers/features/kubernetes
+
+RUN KUBECTL="${KUBECTL_VERSION}" KUSTOMIZE=none HELM=none bash /tmp/devcontainers/features/kubernetes/install.sh
+
+FROM installer AS k9s
+
+ARG K9S_VERSION=latest
+
+COPY --from=devcontainers /tmp/devcontainers/features/k9s /tmp/devcontainers/features/k9s
+
+RUN VERSION="${K9S_VERSION}" bash /tmp/devcontainers/features/k9s/install.sh
+
 FROM installer AS herdr
 
 ARG HERDR_VERSION=latest
@@ -320,6 +336,8 @@ COPY --from=composer /composer /usr/local/bin/composer
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/ /usr/local/libexec/docker/cli-plugins/
 COPY --from=github-cli /usr/local/bin/gh /usr/local/bin/gh
+COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=k9s /usr/local/bin/k9s /usr/local/bin/k9s
 COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
 COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
 COPY --from=supercronic /supercronic /usr/local/bin/supercronic
@@ -348,7 +366,7 @@ RUN set -eu ; \
  && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/npm /usr/local/npm/bin /usr/local/npm/lib /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
     export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
-    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go herdr make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
+    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go herdr k9s kubectl make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
     done ; \
     if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \

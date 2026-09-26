@@ -206,6 +206,20 @@ CATALOG: list[Dependency] = [
         policy='major',
     ),
     Dependency(
+        name='K9S_VERSION',
+        kind='releases',
+        source='derailed/k9s',
+        prefix='v',
+        policy='major',
+    ),
+    Dependency(
+        name='KUBECTL_VERSION',
+        kind='releases',
+        source='kubernetes/kubernetes',
+        prefix='v',
+        policy='series',
+    ),
+    Dependency(
         name='HERDR_VERSION',
         kind='releases',
         source='herdrdev/herdr',
@@ -742,6 +756,8 @@ def dependency_name(key: str) -> str:
     names = {
         'UV_VERSION': 'uv',
         'GO_VERSION': 'Go',
+        'KUBECTL_VERSION': 'kubectl',
+        'K9S_VERSION': 'k9s',
         'PHP_VERSION': 'PHP',
         'NODE_VERSION': 'Node.js',
         'GITHUB_CLI_VERSION': 'GitHub CLI',
@@ -852,7 +868,7 @@ def format_body(plan: Plan, run_url: str | None = None) -> str:
         '<summary>Update policy and provenance</summary>',
         '',
         '- Only `versions` changes. Major upgrades and prereleases are excluded.',
-        '- Runtime series remain pinned; devcontainers and VS Code CLI use fixed commits.',
+        '- Runtime and kubectl minor series remain pinned; devcontainers and VS Code CLI use fixed commits.',
         '- Agent entries set to `latest` stay unchanged and are reinstalled by their image build stages.',
         '- Source lookup failures prevent partial updates. This updater never merges or deploys.',
         '',
