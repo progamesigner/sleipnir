@@ -58,6 +58,8 @@ docker compose up -d
 
 Mount the same socket `emptyDir` at `/run/user/1000` in the sidecar and `/run/docker` in Sleipnir. Mount the workspace at `/workspace` in both containers too: bind-mount source paths are resolved by the daemon, so `docker run -v "$PWD:/app" ...` only works when both containers see the same absolute path.
 
+For a rootful sidecar using `--group=docker`, the image also adds `ubuntu` to the `docker` group with GID 2375. The socket's group must match this GID. This membership keeps Docker access working after `s6-setuidgid` or an SSH login rebuilds the user's groups; Kubernetes `supplementalGroups` alone does not survive that switch.
+
 The daemon data directory `/home/rootless/.local/share/docker` should use a size-limited local `emptyDir`. Do not put Docker's graph data on the shared CephFS workspace or another network filesystem. Losing this volume on pod replacement is intentional: repositories remain on their own volume, while containers, images, and build cache are disposable.
 
 Run the sidecar with an explicit Unix-only host:

@@ -378,7 +378,8 @@ RUN set -eu ; \
  && visudo --check --quiet --file /etc/sudoers.d/ubuntu \
  && mkdir -p /workspace /var/lib/tailscale /run/tailscale \
  && chown ubuntu:ubuntu /workspace /var/lib/tailscale /run/tailscale \
- && usermod --shell /usr/bin/zsh ubuntu
+ && groupadd --gid 2375 docker \
+ && usermod --append --groups docker --shell /usr/bin/zsh ubuntu
 
 COPY rootfs/ /
 
