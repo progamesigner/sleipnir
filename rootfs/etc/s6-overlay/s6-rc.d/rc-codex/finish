@@ -1,3 +1,7 @@
 #!/command/with-contenv sh
 
+if [ -n "${SLEIPNIR_RC_CODEX_HOME:-}" ]; then
+    export CODEX_HOME="${SLEIPNIR_RC_CODEX_HOME}"
+fi
+
 s6-setuidgid ubuntu codex remote-control stop > /dev/null 2>&1 || true
