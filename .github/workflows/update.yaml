@@ -2,7 +2,7 @@ name: Update Sleipnir versions
 
 on:
   schedule:
-  - cron: '0 14 * * *'
+  - cron: '0 18 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -28,7 +28,8 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         PR_BODY_PATH: ${{ runner.temp }}/versions.md
       run: python3 .github/scripts/update.py
-    - if: steps.versions.outputs.changed == 'true'
+    - id: pr
+      if: steps.versions.outputs.changed == 'true'
       uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
       with:
         token: ${{ github.token }}
@@ -39,3 +40,7 @@ jobs:
         commit-message: Update tool versions
         title: ${{ steps.versions.outputs.title }}
         body-path: ${{ runner.temp }}/versions.md
+    - if: steps.pr.outputs.pull-request-number
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh pr merge "${{ steps.pr.outputs.pull-request-number }}" --repo "${{ github.repository }}" --squash --delete-branch
