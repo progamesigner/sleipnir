@@ -116,6 +116,10 @@ class VSCodeResponse(TypedDict):
     productVersion: str
 
 
+class TailscalePackagesResponse(TypedDict):
+    TarballsVersion: str
+
+
 class GitObject(TypedDict):
     sha: str
 
@@ -547,6 +551,15 @@ def resolve(token: str, spec: Dependency, content: str) -> Inventory:
         raise ValueError(
             f'{name}: source returned no stable versions matching the tag format'
         )
+    published = None
+    if name == 'TAILSCALE_VERSION':
+        published = version(
+            fetch_json(
+                token,
+                'https://pkgs.tailscale.com/stable/?mode=json',
+                TailscalePackagesResponse,
+            )['TarballsVersion']
+        )
     compatible: list[Candidate] = []
     for row in rows:
         candidate = version(row['version'])
@@ -556,6 +569,8 @@ def resolve(token: str, spec: Dependency, content: str) -> Inventory:
         if parsed and candidate[:width] != parsed[:width]:
             continue
         if name == 'TAILSCALE_VERSION' and candidate[1] % 2:
+            continue
+        if published and candidate > published:
             continue
         compatible.append(row)
     if not compatible:
