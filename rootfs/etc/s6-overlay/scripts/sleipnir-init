@@ -37,7 +37,11 @@ for DIRECTORY in \
     /var/lib/tailscale \
     /workspace
 do
-    install -d -o ubuntu -g ubuntu -m 0755 ${DIRECTORY}
+    if [ -d ${DIRECTORY} ]; then
+        chown ubuntu:ubuntu ${DIRECTORY}
+    else
+        install -d -o ubuntu -g ubuntu -m 0755 ${DIRECTORY}
+    fi
 done
 
 for DIRECTORY in \

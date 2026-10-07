@@ -222,7 +222,7 @@ The node must also carry `tag:sleipnir`, either from a pre-tagged auth key or fr
 
 ## Volumes
 
-Each agent keeps its own credentials, so each gets its own volume. On every start, `sleipnir-init` creates these writable directories and corrects their ownership to `ubuntu:ubuntu`; this also handles fresh PVC mount points. Two are easy to miss:
+Each agent keeps its own credentials, so each gets its own volume. On every start, `sleipnir-init` creates these writable directories and corrects their ownership to `ubuntu:ubuntu`; this also handles fresh PVC mount points. A directory that already exists keeps its mode, so the `2775` that kubelet puts on a volume root with `fsGroup` survives and `fsGroupChangePolicy: OnRootMismatch` can skip the recursive ownership walk on the next start. Two are easy to miss:
 
 | Path | Holds |
 | --- | --- |
