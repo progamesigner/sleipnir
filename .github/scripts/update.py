@@ -19,9 +19,12 @@ type SourceKind = Literal[
     'node',
     'rust',
     'npm',
+    'temurin',
+    'swift',
+    'android',
 ]
 type UpdatePolicy = Literal['major', 'series']
-type Version = tuple[int, int, int, int]
+type Version = tuple[int, int, int, int, int]
 
 
 class Dependency(TypedDict):
@@ -74,6 +77,10 @@ class Plan(TypedDict):
     can_apply: bool
 
 
+class AssetResponse(TypedDict):
+    name: str
+
+
 class ReleaseResponse(TypedDict, total=False):
     draft: bool
     prerelease: bool
@@ -81,6 +88,7 @@ class ReleaseResponse(TypedDict, total=False):
     name: str
     body: str | None
     html_url: str | None
+    assets: list[AssetResponse]
 
 
 class ImageResponse(TypedDict, total=False):
@@ -157,6 +165,17 @@ class RustPackages(TypedDict):
 
 class RustManifest(TypedDict):
     pkg: RustPackages
+
+
+class SwiftPlatform(TypedDict, total=False):
+    name: str
+    archs: list[str]
+
+
+class SwiftResponse(TypedDict):
+    name: str
+    tag: str
+    platforms: list[SwiftPlatform]
 
 
 CATALOG: list[Dependency] = [
@@ -315,6 +334,34 @@ CATALOG: list[Dependency] = [
         policy='major',
     ),
     Dependency(
+        name='JAVA_VERSION',
+        kind='temurin',
+        source='adoptium/temurin{feature}-binaries',
+        prefix='jdk-',
+        policy='major',
+    ),
+    Dependency(
+        name='KOTLIN_VERSION',
+        kind='releases',
+        source='JetBrains/kotlin',
+        prefix='v',
+        policy='major',
+    ),
+    Dependency(
+        name='SWIFT_VERSION',
+        kind='swift',
+        source='https://www.swift.org/api/v1/install/releases.json',
+        prefix='',
+        policy='major',
+    ),
+    Dependency(
+        name='ANDROID_BUILD_TOOLS_VERSION',
+        kind='android',
+        source='https://dl.google.com/android/repository/repository2-3.xml',
+        prefix='build-tools;',
+        policy='major',
+    ),
+    Dependency(
         name='COPILOT_VERSION',
         kind='releases',
         source='github/copilot-cli',
@@ -351,6 +398,8 @@ AGENT_LATEST: set[str] = {
     'OPENCODE_VERSION',
 }
 UNPINNED: dict[str, str] = {
+    'ANDROID_COMMANDLINE_TOOLS_VERSION': 'Build number of the SDK command-line tools; raise deliberately when sdkmanager needs it',
+    'ANDROID_VERSION': 'Android platform API level; raise deliberately with the projects compileSdk',
     'ANTIGRAVITY_CLI_VERSION': 'Official manifest only exposes its current version; old-version fallback must never install latest',
     'DEVTOOLS_CLOUDFLARED_VERSION': 'Disabled in devtools; keep none',
     'DEVTOOLS_TAILSCALE_VERSION': 'Disabled in devtools; separate TAILSCALE_VERSION manages the installed binary',
@@ -381,11 +430,13 @@ def fetch_json[Response](token: str, url: str, _: type[Response]) -> Response:
 
 
 def version(value: str) -> Version | None:
-    if not re.fullmatch(r'\d+(?:\.\d+){1,3}', value):
+    # Temurin releases carry a build number after '+', ordered after the dotted release.
+    match = re.fullmatch(r'(\d+(?:\.\d+){1,3})(?:\+(\d+))?', value)
+    if not match:
         return None
-    parts = tuple(map(int, value.split('.')))
+    parts = tuple(map(int, match[1].split('.')))
     padded = parts + (0,) * (4 - len(parts))
-    return padded[0], padded[1], padded[2], padded[3]
+    return padded[0], padded[1], padded[2], padded[3], int(match[2] or 0)
 
 
 def read_version(content: str, name: str) -> str:
@@ -422,16 +473,25 @@ def replace_version(content: str, name: str, old: str, new: str) -> str:
 
 
 def candidates(
-    token: str, kind: SourceKind, source: str, prefix: str, current: str
+    token: str,
+    kind: SourceKind,
+    source: str,
+    prefix: str,
+    current: str,
+    ubuntu: str = '',
 ) -> tuple[list[Candidate], bool]:
     records: list[Candidate] = []
     complete = True
-    if kind in ('releases', 'tags'):
+    if kind in ('releases', 'tags', 'temurin'):
         complete = False
+        # Temurin publishes one repository per feature release, so the pin selects it.
+        feature = current.split('.')[0]
+        repository = source.format(feature=feature)
+        endpoint = 'tags' if kind == 'tags' else 'releases'
         for page in range(1, 6):
             rows = fetch_json(
                 token,
-                f'https://api.github.com/repos/{source}/{kind}?per_page=100&page={page}',
+                f'https://api.github.com/repos/{repository}/{endpoint}?per_page=100&page={page}',
                 list[ReleaseResponse],
             )
             for row in rows:
@@ -441,13 +501,25 @@ def candidates(
                 if not tag.startswith(prefix):
                     continue
                 value = tag[len(prefix) :]
+                assets = {asset['name'] for asset in row.get('assets', [])}
+                if kind == 'temurin' and not all(
+                    any(
+                        re.fullmatch(
+                            rf'OpenJDK{feature}U-jdk_{arch}_linux_hotspot_.+\.tar\.gz',
+                            name,
+                        )
+                        for name in assets
+                    )
+                    for arch in ('x64', 'aarch64')
+                ):
+                    continue
                 if version(value):
                     records.append(
                         {
                             'version': value,
                             'notes': row.get('body') or '',
                             'url': row.get('html_url')
-                            or f'https://github.com/{source}/releases/tag/{quote(tag, safe="")}',
+                            or f'https://github.com/{repository}/releases/tag/{quote(tag, safe="")}',
                         }
                     )
             if len(rows) < 100 or any(r['version'] == current for r in records):
@@ -525,6 +597,32 @@ def candidates(
                 'url': source,
             }
         ]
+    elif kind == 'swift':
+        records = [
+            {
+                'version': row['name'],
+                'notes': '',
+                'url': f'https://github.com/swiftlang/swift/releases/tag/{quote(row["tag"], safe="")}',
+            }
+            for row in fetch_json(token, source, list[SwiftResponse])
+            if any(
+                platform.get('name') == f'Ubuntu {ubuntu}'
+                and {'x86_64', 'aarch64'} <= set(platform.get('archs', []))
+                for platform in row['platforms']
+            )
+        ]
+    elif kind == 'android':
+        records = [
+            {
+                'version': value,
+                'notes': '',
+                'url': 'https://developer.android.com/tools/releases/build-tools',
+            }
+            for value in re.findall(
+                rf'<remotePackage path="{re.escape(prefix)}([0-9.]+)">',
+                fetch_text(token, source),
+            )
+        ]
     else:
         raise ValueError(f'Unknown source: {kind}')
     return records, complete
@@ -546,7 +644,9 @@ def resolve(token: str, spec: Dependency, content: str) -> Inventory:
         }
     ):
         raise ValueError(f'{name}: current value is not a pinned stable version')
-    rows, complete = candidates(token, kind, source, prefix, current)
+    rows, complete = candidates(
+        token, kind, source, prefix, current, read_version(content, 'UBUNTU_VERSION')
+    )
     if not any(version(row['version']) for row in rows):
         raise ValueError(
             f'{name}: source returned no stable versions matching the tag format'
@@ -582,9 +682,9 @@ def resolve(token: str, spec: Dependency, content: str) -> Inventory:
             history_complete=complete,
             status='unchanged',
         )
-    selected = max(compatible, key=lambda row: version(row['version']) or (0, 0, 0, 0))
+    selected = max(compatible, key=lambda row: version(row['version']) or (0, 0, 0, 0, 0))
     ordered = sorted(
-        compatible, key=lambda row: version(row['version']) or (0, 0, 0, 0)
+        compatible, key=lambda row: version(row['version']) or (0, 0, 0, 0, 0)
     )
     notes = '\n\n'.join(
         f'{row["version"]}: {row["notes"] or "Release notes unavailable; inspect source link."}\n{row["url"]}'
@@ -692,7 +792,7 @@ def build_plan(token: str, owner: str, repository: str) -> Plan:
         if (
             line.strip()
             and not line.lstrip().startswith('#')
-            and not re.fullmatch(r'[A-Z][A-Z0-9_]*=[A-Za-z0-9.]+', line)
+            and not re.fullmatch(r'[A-Z][A-Z0-9_]*=[A-Za-z0-9.+]+', line)
         ):
             raise ValueError('versions must contain plain KEY=VALUE entries')
     known = (
