@@ -2,7 +2,7 @@ ARG COMPOSER_VERSION=latest
 ARG UBUNTU_VERSION=latest
 ARG UV_VERSION=latest
 
-FROM ubuntu:${UBUNTU_VERSION} AS devcontainers
+FROM ubuntu:${UBUNTU_VERSION} AS devcontainers-git
 
 ARG DEVCONTAINERS_REF=main
 
@@ -13,6 +13,10 @@ RUN apt-get update \
 RUN git init --quiet /tmp/devcontainers \
  && git -C /tmp/devcontainers fetch --quiet --depth=1 https://github.com/progamesigner/devcontainers.git "${DEVCONTAINERS_REF}" \
  && git -C /tmp/devcontainers checkout --quiet FETCH_HEAD
+
+FROM scratch AS devcontainers
+
+COPY --from=devcontainers-git /tmp/devcontainers/features /features
 
 FROM ubuntu:${UBUNTU_VERSION} AS fetcher
 
@@ -90,7 +94,7 @@ ARG DEVTOOLS_COSIGN_VERSION=latest
 ARG DEVTOOLS_CLOUDFLARED_VERSION=none
 ARG DEVTOOLS_TAILSCALE_VERSION=none
 
-COPY --from=devcontainers /tmp/devcontainers/features/devtools /tmp/devcontainers/features/devtools
+COPY --from=devcontainers /features/devtools /tmp/devcontainers/features/devtools
 
 RUN CLOUDFLARED="${DEVTOOLS_CLOUDFLARED_VERSION}" COSIGN="${DEVTOOLS_COSIGN_VERSION}" TAILSCALE="${DEVTOOLS_TAILSCALE_VERSION}" bash /tmp/devcontainers/features/devtools/install.sh
 
@@ -98,7 +102,7 @@ FROM installer AS github-cli
 
 ARG GITHUB_CLI_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/github-cli /tmp/devcontainers/features/github-cli
+COPY --from=devcontainers /features/github-cli /tmp/devcontainers/features/github-cli
 
 RUN VERSION="${GITHUB_CLI_VERSION}" bash /tmp/devcontainers/features/github-cli/install.sh
 
@@ -106,7 +110,7 @@ FROM installer AS kubectl
 
 ARG KUBECTL_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/kubernetes /tmp/devcontainers/features/kubernetes
+COPY --from=devcontainers /features/kubernetes /tmp/devcontainers/features/kubernetes
 
 RUN KUBECTL="${KUBECTL_VERSION}" KUSTOMIZE=none HELM=none bash /tmp/devcontainers/features/kubernetes/install.sh
 
@@ -114,7 +118,7 @@ FROM installer AS k9s
 
 ARG K9S_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/k9s /tmp/devcontainers/features/k9s
+COPY --from=devcontainers /features/k9s /tmp/devcontainers/features/k9s
 
 RUN VERSION="${K9S_VERSION}" bash /tmp/devcontainers/features/k9s/install.sh
 
@@ -122,7 +126,7 @@ FROM installer AS herdr
 
 ARG HERDR_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/features/herdr
+COPY --from=devcontainers /features/herdr /tmp/devcontainers/features/herdr
 
 RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
 
@@ -130,7 +134,7 @@ FROM installer AS moshi
 
 ARG MOSHI_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/moshi /tmp/devcontainers/features/moshi
+COPY --from=devcontainers /features/moshi /tmp/devcontainers/features/moshi
 
 RUN VERSION="${MOSHI_VERSION}" BRIDGE=false CLIPBOARD=false bash /tmp/devcontainers/features/moshi/install.sh
 
@@ -144,7 +148,7 @@ ARG DOCKER_COMPOSE_VERSION=latest
 
 ENV _REMOTE_USER=ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/docker /tmp/devcontainers/features/docker
+COPY --from=devcontainers /features/docker /tmp/devcontainers/features/docker
 
 RUN VERSION="${DOCKER_VERSION}" \
     BUILDX="${DOCKER_BUILDX_VERSION}" \
@@ -161,7 +165,7 @@ ARG BUN_VERSION=latest
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/bun /tmp/devcontainers/features/bun
+COPY --from=devcontainers /features/bun /tmp/devcontainers/features/bun
 
 RUN VERSION="${BUN_VERSION}" bash /tmp/devcontainers/features/bun/install.sh
 
@@ -172,7 +176,7 @@ ARG DENO_VERSION=latest
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/deno /tmp/devcontainers/features/deno
+COPY --from=devcontainers /features/deno /tmp/devcontainers/features/deno
 
 RUN VERSION="${DENO_VERSION}" bash /tmp/devcontainers/features/deno/install.sh
 
@@ -183,7 +187,7 @@ ARG GO_VERSION=none
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/go /tmp/devcontainers/features/go
+COPY --from=devcontainers /features/go /tmp/devcontainers/features/go
 
 RUN sed -i \
         -e 's#tar -xz -f /tmp/go.tar.gz -C ${GOROOT} --strip-components=1#tar -xz -f /tmp/go.tar.gz -C ${GOROOT} --strip-components=1 --exclude="go/test/*" --exclude="go/test"#' \
@@ -197,7 +201,7 @@ ARG NODE_VERSION=none
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/node /tmp/devcontainers/features/node
+COPY --from=devcontainers /features/node /tmp/devcontainers/features/node
 
 RUN VERSION="${NODE_VERSION}" bash /tmp/devcontainers/features/node/install.sh
 
@@ -208,7 +212,7 @@ ARG PHP_VERSION=none
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/php /tmp/devcontainers/features/php
+COPY --from=devcontainers /features/php /tmp/devcontainers/features/php
 
 RUN sed -i \
         -e '/--disable-phar/d' \
@@ -224,7 +228,7 @@ ARG PYTHON_VERSION=none
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/python /tmp/devcontainers/features/python
+COPY --from=devcontainers /features/python /tmp/devcontainers/features/python
 
 RUN sed -i \
         -e '/tar -xJ -f \/tmp\/python.tar.xz -C \/usr\/src\/python --strip-components=1/a\    rm -rf /usr/src/python/Lib/test /usr/src/python/Lib/idlelib/idle_test' \
@@ -238,7 +242,7 @@ ARG RUST_VERSION=none
 ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
-COPY --from=devcontainers /tmp/devcontainers/features/rust /tmp/devcontainers/features/rust
+COPY --from=devcontainers /features/rust /tmp/devcontainers/features/rust
 
 RUN sed -i \
         -e 's#RUST_COMPONENTS=\$(cat /tmp/rust/components)#RUST_COMPONENTS=$(grep -vE "^rust-docs(-json-preview)?$|^llvm-tools-preview$" /tmp/rust/components)#' \
@@ -249,7 +253,7 @@ FROM installer AS agent-antigravity-cli
 
 ARG ANTIGRAVITY_CLI_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/antigravity-cli /tmp/devcontainers/features/antigravity-cli
+COPY --from=devcontainers /features/antigravity-cli /tmp/devcontainers/features/antigravity-cli
 
 RUN VERSION="${ANTIGRAVITY_CLI_VERSION}" bash /tmp/devcontainers/features/antigravity-cli/install.sh
 
@@ -257,7 +261,7 @@ FROM installer AS agent-copilot
 
 ARG COPILOT_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/copilot-cli /tmp/devcontainers/features/copilot-cli
+COPY --from=devcontainers /features/copilot-cli /tmp/devcontainers/features/copilot-cli
 
 RUN VERSION="${COPILOT_VERSION}" bash /tmp/devcontainers/features/copilot-cli/install.sh
 
@@ -265,7 +269,7 @@ FROM installer AS agent-opencode
 
 ARG OPENCODE_VERSION=latest
 
-COPY --from=devcontainers /tmp/devcontainers/features/opencode /tmp/devcontainers/features/opencode
+COPY --from=devcontainers /features/opencode /tmp/devcontainers/features/opencode
 
 RUN VERSION="${OPENCODE_VERSION}" bash /tmp/devcontainers/features/opencode/install.sh
 
@@ -277,7 +281,7 @@ ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
 COPY --from=lang-node /usr/local/ /usr/local/
-COPY --from=devcontainers /tmp/devcontainers/features/claude-code /tmp/devcontainers/features/claude-code
+COPY --from=devcontainers /features/claude-code /tmp/devcontainers/features/claude-code
 
 RUN VERSION="${CLAUDE_CODE_VERSION}" bash /tmp/devcontainers/features/claude-code/install.sh
 
@@ -289,7 +293,7 @@ ENV _REMOTE_USER=ubuntu
 ENV _REMOTE_USER_HOME=/home/ubuntu
 
 COPY --from=lang-node /usr/local/ /usr/local/
-COPY --from=devcontainers /tmp/devcontainers/features/codex /tmp/devcontainers/features/codex
+COPY --from=devcontainers /features/codex /tmp/devcontainers/features/codex
 
 RUN VERSION="${CODEX_VERSION}" bash /tmp/devcontainers/features/codex/install.sh
 

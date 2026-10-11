@@ -270,6 +270,16 @@ Release assets disagree about how to spell an architecture, so the Dockerfile ma
 
 Schedule the pods onto the x86 nodes. A Raspberry Pi will not carry multiple agent CLIs.
 
+### Feature source
+
+Every installer comes from the `devcontainers` stage, which is the `features` directory of progamesigner/devcontainers at `DEVCONTAINERS_REF`. To build against a checkout that is not on its `main` branch yet, such as unpublished feature changes, replace the stage with the checkout:
+
+```bash
+docker buildx build "${build_args[@]}" --build-context devcontainers=../devcontainers --platform linux/amd64 -t sleipnir:local .
+```
+
+The published image always uses the pinned commit, so a change that needs new features lands only after `DEVCONTAINERS_REF` points at a commit containing them.
+
 ### Dependency updates
 
 `update.yaml` checks stable upstream versions daily at 01:00 UTC and can also be run manually. It updates only `versions` and maintains one PR on `automation/update-versions`, using `github-actions[bot]` and verified commits. Review and merge the PR to trigger the existing image publication workflow; the updater never merges or deploys. Source lookup failures prevent all updates. Major upgrades are excluded, and runtime series are preserved. Agent entries set to `latest` remain unchanged.
