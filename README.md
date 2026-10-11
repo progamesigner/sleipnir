@@ -111,10 +111,35 @@ Each language also needs the thing that actually installs its dependencies, othe
 | Python | `uv`, `uvx` | `COPY --from=ghcr.io/astral-sh/uv` |
 | Rust | `cargo` (with `clippy` and `rustfmt`) | already in the rust feature |
 | Go | `go` | already in the go feature |
+| Java | the repository's `./gradlew` or `./mvnw` | the java feature installs only the Temurin JDK |
+| Kotlin | the repository's `./gradlew` | the kotlin feature adds `kotlinc` for single files and scripts |
+| Android | `sdkmanager`, then the repository's `./gradlew` | the android feature, amd64 only |
+| Swift | `swift package` | bundled with the swift feature |
 
 `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` point at `/usr/local/uv`, owned by `ubuntu` and on `PATH`, so `uv tool install` from a pane lands somewhere usable. A repository that needs pnpm or yarn can reach them through `corepack`, which Node 24 still bundles.
 
-`herdr` and `moshi` come from the same place, built with `BRIDGE=false`: their devcontainer bridge exists to reach a Mac's socket over SSH, and Sleipnir has no Mac to borrow from. It runs its own herdr server and its own Moshi daemon.
+### JVM, Android and Swift
+
+The JDK, Kotlin compiler, Android SDK and Swift toolchain sit where the devcontainer features put them, and the image sets the same variables:
+
+| Toolchain | Home | On `PATH` |
+| --- | --- | --- |
+| Java | `JAVA_HOME=/opt/java/temurin` | `$JAVA_HOME/bin` |
+| Kotlin | `KOTLIN_HOME=/opt/kotlin` | `$KOTLIN_HOME/bin` |
+| Swift | `SWIFT_HOME=/opt/swift` | `$SWIFT_HOME/usr/bin` |
+| Android | `ANDROID_HOME=ANDROID_SDK_ROOT=/opt/android` | `cmdline-tools/latest/bin`, `platform-tools`, `emulator` |
+
+These directories come after the system directories on `PATH`, as the features append them. The Swift toolchain ships its own `clang`, `lld` and `lldb`, and appending them keeps them from shadowing anything the image already installs.
+
+The JDK follows the 21 LTS series. Gradle runs on Java 21 from 8.5 onward, but needs 9.1 for Java 25, so 21 still runs the wrappers most Android and Kotlin repositories pin. A project that wants a newer Java for compilation can ask for it through a Gradle toolchain.
+
+Kotlin and Android install with the JDK bind-mounted into their stages: both installers run Java, but neither stage keeps a second copy of it in the build cache. The Android stage installs the platform, build-tools, platform-tools and the emulator; the image carries the emulator's shared libraries, but no system image or AVD. Hardware acceleration needs an accessible `/dev/kvm`, which neither the image nor the feature provides; that is up to the pod spec. Without it, an AVD can still boot with `-accel off`, in software, and slowly. Set `ANDROID_EMULATOR=false` to leave it out.
+
+Google publishes Android SDK platform-tools, build-tools and the emulator only for x86_64 Linux. The arm64 image therefore leaves `/opt/android` empty and says so in its build log: `sdkmanager`, `adb`, the build-tools and the emulator are missing there. An Android build on arm64 needs a separately supplied toolchain that supports it, or an x86_64 environment. Java, Kotlin and Swift work on both architectures. Schedule the pods on x86 nodes, as for everything else.
+
+`/opt/android` is owned by `ubuntu`, so `sdkmanager` and the Android Gradle plugin can add platforms, build-tools or an NDK from a pane. Those additions live in the container filesystem and disappear on restart, back to the platform and build-tools selected in `versions`. Pin what a project needs in `versions` rather than relying on a download surviving.
+
+The same goes for build caches. `~/.gradle`, `~/.m2`, `~/.android`, `~/.konan` and SwiftPM's `~/.cache/org.swift.swiftpm` are not volumes: each restart starts them empty, and while the pod runs they count against its ephemeral-storage limit. A Gradle cache can reach several gigabytes, so size the limit for it. Keep these caches off the CephFS workspace, for the same reason Docker's data directory stays off it. A project's own `.gradle` and `.build` directories sit in the repository and persist with it.
 
 ### Updating a CLI without rebuilding
 
@@ -254,7 +279,7 @@ Nothing is logged in yet, and that is fine: Herdr and Moshi come up on their own
 
 ## Building
 
-`versions` contains build selections as plain `KEY=VALUE` entries, without quotes, comments, or shell expressions. The publish workflow passes the file contents directly to the build action. Dockerfile defaults use `latest`, `main`, or `none` where supported; `none` on a direct-download stage is an unset marker and does not produce a complete image. Python source verification uses the cosign version default provided by the pinned devcontainers installer. Published builds use the selections in `versions`, including a fixed VS Code commit. Agent selectors remain `latest`, and the publish workflow rebuilds their stages without cache.
+`versions` contains build selections as plain `KEY=VALUE` entries, without quotes, comments, or shell expressions. The publish workflow passes the file contents directly to the build action. Dockerfile defaults use `latest`, `main`, or `none` where supported; `none` on a direct-download stage is an unset marker and does not produce a complete image. Java takes an exact Temurin release such as `21.0.12.1+1`, the one place a `+` appears. Python source verification uses the cosign version default provided by the pinned devcontainers installer. Published builds use the selections in `versions`, including a fixed VS Code commit. Agent selectors remain `latest`, and the publish workflow rebuilds their stages without cache.
 
 For a local build, use Bash to pass the same file without evaluating it as shell code:
 
@@ -287,5 +312,7 @@ The published image always uses the pinned commit, so a change that needs new fe
 The PR includes a version table and upstream release notes, without AI inference. Allow GitHub Actions to create pull requests in the repository's Actions settings. If PR CI is added later, workflows triggered by PRs created with `GITHUB_TOKEN` require approval to run.
 
 `KUBECTL_VERSION` pins the Kubernetes client. Dependency updates stay within its minor series; change the pin deliberately when upgrading the cluster. The Kubernetes installer verifies the official SHA256 checksum for both amd64 and arm64. Helm and Kustomize are disabled in this installer stage.
+
+`JAVA_VERSION` follows the GitHub releases of `adoptium/temurin<feature>-binaries` for its pinned feature release, so the 21 pin stays on 21, and only releases with Linux JDK archives for both x64 and aarch64. `KOTLIN_VERSION` follows stable JetBrains releases, and `SWIFT_VERSION` follows swift.org releases that publish both architectures for the image's Ubuntu release, so a new Swift waits until it supports that Ubuntu. `ANDROID_BUILD_TOOLS_VERSION` follows stable build-tools in Google's SDK repository within its major version. `ANDROID_VERSION` (the platform API level) and `ANDROID_COMMANDLINE_TOOLS_VERSION` are listed as manual: raise the platform with the projects' `compileSdk`.
 
 `K9S_VERSION` pins k9s, with stable updates within its current major version. Both kubectl and k9s use `/home/ubuntu/.kube/config` (or `KUBECONFIG`). Mount a populated kubeconfig directory with referenced certificates or use a self-contained kubeconfig; exec-based authentication also requires its credential helper in the image.

@@ -158,6 +158,43 @@ RUN VERSION="${DOCKER_VERSION}" \
 
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
+FROM installer AS lang-java
+
+ARG JAVA_VERSION=none
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /features/java /tmp/devcontainers/features/java
+
+RUN VERSION="${JAVA_VERSION}" bash /tmp/devcontainers/features/java/install.sh
+
+FROM installer AS lang-android
+
+ARG TARGETARCH
+
+ARG ANDROID_VERSION=none
+ARG ANDROID_BUILD_TOOLS_VERSION=none
+ARG ANDROID_COMMANDLINE_TOOLS_VERSION=15859902
+ARG ANDROID_EMULATOR=true
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /features/android /tmp/devcontainers/features/android
+
+RUN --mount=type=bind,from=lang-java,source=/opt/java/temurin,target=/opt/java/temurin \
+    case "${TARGETARCH}" in \
+        amd64) \
+            VERSION="${ANDROID_VERSION}" \
+            BUILD="${ANDROID_BUILD_TOOLS_VERSION}" \
+            COMMANDLINE="${ANDROID_COMMANDLINE_TOOLS_VERSION}" \
+            EMULATOR="${ANDROID_EMULATOR}" \
+            bash /tmp/devcontainers/features/android/install.sh ;; \
+        *) echo "Android SDK platform-tools, build-tools and emulator are amd64-only; /opt/android stays empty on ${TARGETARCH}" ;; \
+    esac \
+ && mkdir -p /opt/android
+
 FROM installer AS lang-bun
 
 ARG BUN_VERSION=latest
@@ -193,6 +230,18 @@ RUN sed -i \
         -e 's#tar -xz -f /tmp/go.tar.gz -C ${GOROOT} --strip-components=1#tar -xz -f /tmp/go.tar.gz -C ${GOROOT} --strip-components=1 --exclude="go/test/*" --exclude="go/test"#' \
         /tmp/devcontainers/features/go/install.sh \
  && VERSION="${GO_VERSION}" bash /tmp/devcontainers/features/go/install.sh
+
+FROM installer AS lang-kotlin
+
+ARG KOTLIN_VERSION=none
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /features/kotlin /tmp/devcontainers/features/kotlin
+
+RUN --mount=type=bind,from=lang-java,source=/opt/java/temurin,target=/opt/java/temurin \
+    VERSION="${KOTLIN_VERSION}" bash /tmp/devcontainers/features/kotlin/install.sh
 
 FROM installer AS lang-node
 
@@ -249,6 +298,17 @@ RUN sed -i \
         /tmp/devcontainers/features/rust/install.sh \
  && VERSION="${RUST_VERSION}" bash /tmp/devcontainers/features/rust/install.sh
 
+FROM installer AS lang-swift
+
+ARG SWIFT_VERSION=none
+
+ENV _REMOTE_USER=ubuntu
+ENV _REMOTE_USER_HOME=/home/ubuntu
+
+COPY --from=devcontainers /features/swift /tmp/devcontainers/features/swift
+
+RUN VERSION="${SWIFT_VERSION}" bash /tmp/devcontainers/features/swift/install.sh
+
 FROM installer AS agent-antigravity-cli
 
 ARG ANTIGRAVITY_CLI_VERSION=latest
@@ -299,12 +359,17 @@ RUN VERSION="${CODEX_VERSION}" bash /tmp/devcontainers/features/codex/install.sh
 
 FROM devtools
 
+ARG TARGETARCH
+
+ARG ANDROID_EMULATOR=true
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
  && apt-get install --no-install-recommends --yes \
+        binutils-gold \
         bubblewrap \
         build-essential \
         ca-certificates \
@@ -314,22 +379,48 @@ RUN apt-get update \
         jq \
         less \
         libargon2-1 \
+        libcurl4-openssl-dev \
+        libdrm2 \
+        libedit2 \
+        libexpat1 \
+        libgbm1 \
+        libglu1-mesa \
+        libice6 \
+        libncurses-dev \
+        libnss3 \
         libpng16-16t64 \
+        libpulse0 \
+        libpython3-dev \
+        libsm6 \
         libsodium23 \
+        libsqlite3-0 \
+        libx11-6 \
+        libxcb1 \
+        libxcomposite1 \
+        libxcursor1 \
+        libxi6 \
+        libxkbfile1 \
         libxml2-16 \
+        libxml2-dev \
+        libxrandr2 \
+        libxtst6 \
+        libz3-dev \
         locales \
         mosh \
         openssh-client \
+        pkg-config \
         procps \
         python3 \
         ripgrep \
         sudo \
         tar \
+        tzdata \
         unzip \
         vim \
         wget \
         xz-utils \
         zip \
+        zlib1g-dev \
         zsh \
  && rm -rf /var/lib/apt/lists/*
 
@@ -350,10 +441,14 @@ COPY --from=lang-bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=lang-deno /usr/local/bin/deno /usr/local/bin/deno
 COPY --from=lang-go /usr/local/go /usr/local/go
 COPY --from=lang-go /opt/go /opt/go
+COPY --from=lang-java /opt/java/temurin /opt/java/temurin
+COPY --from=lang-kotlin /opt/kotlin /opt/kotlin
 COPY --from=lang-node /usr/local/ /usr/local/
 COPY --from=lang-php /usr/local/ /usr/local/
 COPY --from=lang-python /usr/local/ /usr/local/
 COPY --from=lang-rust /usr/local/ /usr/local/
+COPY --from=lang-swift /opt/swift /opt/swift
+COPY --chown=ubuntu:ubuntu --from=lang-android /opt/android /opt/android
 COPY --from=agent-antigravity-cli /usr/local/share/antigravity-cli /usr/local/share/antigravity-cli
 COPY --from=agent-claude-code /usr/local/share/claude-code /usr/local/share/claude-code
 COPY --from=agent-codex /usr/local/share/codex /usr/local/share/codex
@@ -368,9 +463,12 @@ RUN set -eu ; \
         if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
     done \
  && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/npm /usr/local/npm/bin /usr/local/npm/lib /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
-    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
+    export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH}:/opt/java/temurin/bin:/opt/kotlin/bin:/opt/swift/usr/bin:/opt/android/cmdline-tools/latest/bin:/opt/android/platform-tools:/opt/android/emulator ; \
     missing="" ; \
-    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go herdr k9s kubectl make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
+    binaries="agy bun cc claude code codex composer copilot cargo deno docker gh go herdr java javac k9s kotlinc kubectl make moshi-hook node npm opencode php python3 rustc sudo swift swiftc tailscale tailscaled uv uvx" ; \
+    if [ "${TARGETARCH}" = amd64 ] ; then binaries="${binaries} adb sdkmanager" ; fi ; \
+    if [ "${TARGETARCH}" = amd64 ] && [ "${ANDROID_EMULATOR}" = true ] ; then binaries="${binaries} emulator" ; fi ; \
+    for binary in ${binaries} ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
     done ; \
     if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \
@@ -390,13 +488,18 @@ COPY rootfs/ /
 ENV HOME=/home/ubuntu
 ENV LANG=C.utf8
 ENV LC_ALL=C.utf8
-ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
+ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin:/opt/java/temurin/bin:/opt/kotlin/bin:/opt/swift/usr/bin:/opt/android/cmdline-tools/latest/bin:/opt/android/platform-tools:/opt/android/emulator
 ENV SHELL=/usr/bin/zsh
 
+ENV ANDROID_HOME=/opt/android
+ENV ANDROID_SDK_ROOT=/opt/android
 ENV CARGO_HOME=/usr/local/cargo
 ENV DOCKER_HOST=unix:///run/docker/docker.sock
 ENV GOPATH=/opt/go
 ENV GOROOT=/usr/local/go
+ENV JAVA_HOME=/opt/java/temurin
+ENV KOTLIN_HOME=/opt/kotlin
+ENV SWIFT_HOME=/opt/swift
 
 ENV NPM_CONFIG_PREFIX=/usr/local/npm
 ENV S6_KEEP_ENV=1
