@@ -35,7 +35,7 @@ for DIRECTORY in \
     /usr/local/uv/bin \
     /usr/local/uv/tools \
     /var/lib/tailscale \
-    /workspace
+    "${SLEIPNIR_WORKSPACE:-/home/ubuntu/workspaces}"
 do
     if [ -d ${DIRECTORY} ]; then
         chown ubuntu:ubuntu ${DIRECTORY}

@@ -2,4 +2,6 @@
 
 [ "${SLEIPNIR_ENABLE_HERDR:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
 
+export HERDR_STARTUP_CWD="${HERDR_STARTUP_CWD:-${SLEIPNIR_WORKSPACE:-/home/ubuntu/workspaces}}"
+
 exec s6-setuidgid ubuntu herdr server

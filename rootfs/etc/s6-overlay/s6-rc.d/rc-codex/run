@@ -6,7 +6,7 @@ if [ -n "${SLEIPNIR_RC_CODEX_HOME:-}" ]; then
     export CODEX_HOME="${SLEIPNIR_RC_CODEX_HOME}"
 fi
 
-cd /workspace || exit 1
+cd "${SLEIPNIR_WORKSPACE:-/home/ubuntu/workspaces}" || exit 1
 
 s6-setuidgid ubuntu codex remote-control start || exit 1
 

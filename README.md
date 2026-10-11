@@ -25,7 +25,7 @@ Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tre
 
 `permissions-init` runs after `dotfiles-init` and re-tightens `~/.gnupg` and `~/.ssh` to `0700`, plus the files in them to owner-only. Both are PVC mounts, so they arrive as `0775` with the fsGroup setgid bit, and the CephFS volumes carry a default ACL that grants the group write access on new files whatever the umask is. GnuPG and OpenSSH both refuse a home directory anyone but the owner can reach, so without this step `gpg -k` warns about unsafe permissions and `ssh` rejects `~/.ssh/config`.
 
-`rc-claude` runs with `--no-create-session-in-dir`, so nothing is pre-created in `/workspace`; every session comes from claude.ai/code or the app on demand. Those are auto-named, and the name prefix comes from `--remote-control-session-name-prefix` (`CLAUDE_RC_NAME`) rather than `--name`, which only labels a session the service creates itself. Claude lowercases the prefix and replaces everything but letters and digits with `-`.
+`rc-claude` runs with `--no-create-session-in-dir`, so nothing is pre-created in `SLEIPNIR_WORKSPACE`; every session comes from claude.ai/code or the app on demand. Those are auto-named, and the name prefix comes from `--remote-control-session-name-prefix` (`CLAUDE_RC_NAME`) rather than `--name`, which only labels a session the service creates itself. Claude lowercases the prefix and replaces everything but letters and digits with `-`.
 
 Its status screen redraws about once a second, and with no TTY under s6 every redraw is reprinted in full, which buries everything else in `kubectl logs`. `remote-control` has no quiet mode, so `rc-claude` is an s6 pipeline instead: `producer-for` sends its stdout to `rc-claude-log`, which is `s6-log -b n3 s1000000 T /var/log/rc-claude` — four rotated 1MB files, timestamped, readable with `tail /var/log/rc-claude/current`. Only stdout is piped, so anything the CLI writes to stderr still reaches the container log.
 
@@ -58,7 +58,7 @@ docker run --rm app:test
 docker compose up -d
 ```
 
-Mount the same socket `emptyDir` at `/run/user/1000` in the sidecar and `/run/docker` in Sleipnir. Mount the workspace at `/workspace` in both containers too: bind-mount source paths are resolved by the daemon, so `docker run -v "$PWD:/app" ...` only works when both containers see the same absolute path.
+Mount the same socket `emptyDir` at `/run/user/1000` in the sidecar and `/run/docker` in Sleipnir. Mount the workspace at `SLEIPNIR_WORKSPACE` (default `/home/ubuntu/workspaces`) in both containers too: bind-mount source paths are resolved by the daemon, so `docker run -v "$PWD:/app" ...` only works when both containers see the same absolute path.
 
 For a rootful sidecar using `--group=docker`, the image also adds `ubuntu` to the `docker` group with GID 2375. The socket's group must match this GID. This membership keeps Docker access working after `s6-setuidgid` or an SSH login rebuilds the user's groups; Kubernetes `supplementalGroups` alone does not survive that switch.
 
@@ -89,7 +89,7 @@ containers:
   - name: docker-data
     mountPath: /home/rootless/.local/share/docker
   - name: workspace
-    mountPath: /workspace
+    mountPath: /home/ubuntu/workspaces
 volumes:
 - name: docker-socket
   emptyDir: {}
@@ -140,7 +140,8 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `SLEIPNIR_ENABLE_CODE_TUNNEL` | `0` | Set to `1` to run the VS Code tunnel. |
 | `CODE_TUNNEL_NAME` | `sleipnir` | Name shown in vscode.dev. The CLI lowercases the name and accepts only letters, digits and `-`, up to 20 characters, so an uppercase value registers lowercased. |
 | `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. It is also passed as the session name prefix; without it the prefix falls back to the hostname, which under Kubernetes is the pod name unless the pod sets `hostname`. |
-| `HERDR_STARTUP_CWD` | `/workspace` | herdr seeds an initial shell pane here. |
+| `SLEIPNIR_WORKSPACE` | `/home/ubuntu/workspaces` | Code directory. `rc-claude`, `rc-codex` and `rc-agy` start here, and `sleipnir-init` creates it. It sits under `$HOME` so that the Moshi file browser can open it. |
+| `HERDR_STARTUP_CWD` | `$SLEIPNIR_WORKSPACE` | herdr seeds an initial shell pane here. |
 | `SLEIPNIR_ENABLE_SCHEDULER` | `0` | Set to `1` to run the scheduler. |
 | `SLEIPNIR_SCHEDULER_CRONTAB` | `/etc/sleipnir/scheduler/crontab` | Authored crontab to validate, watch and run. Mount a file here or point to another path. |
 | `SLEIPNIR_SCHEDULER_WORKDIR` | `/home/ubuntu` | Working directory inherited by scheduled commands. Prefer absolute command paths in the crontab. |
@@ -239,7 +240,7 @@ Each agent keeps its own credentials, so each gets its own volume. On every star
 | `/home/ubuntu/.vscode-cli` | VS Code tunnel; the server downloads on first start |
 | `/home/ubuntu/.vscode-server` | Remote extensions and their `globalStorage`; without it every restart reinstalls them |
 | `/var/lib/tailscale` | Tailscale state and SSH host keys; owned by `ubuntu`, because `tailscaled` does not run as root |
-| `/workspace` | code |
+| `/home/ubuntu/workspaces` | code (`SLEIPNIR_WORKSPACE`) |
 
 ## First start
 

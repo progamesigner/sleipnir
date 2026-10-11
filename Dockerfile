@@ -376,8 +376,8 @@ RUN set -eu ; \
  && printf 'ubuntu ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/ubuntu \
  && chmod 0440 /etc/sudoers.d/ubuntu \
  && visudo --check --quiet --file /etc/sudoers.d/ubuntu \
- && mkdir -p /workspace /var/lib/tailscale /run/tailscale \
- && chown ubuntu:ubuntu /workspace /var/lib/tailscale /run/tailscale \
+ && mkdir -p /home/ubuntu/workspaces /var/lib/tailscale /run/tailscale \
+ && chown ubuntu:ubuntu /home/ubuntu/workspaces /var/lib/tailscale /run/tailscale \
  && groupadd --gid 2375 docker \
  && usermod --append --groups docker --shell /usr/bin/zsh ubuntu
 
@@ -394,9 +394,9 @@ ENV DOCKER_HOST=unix:///run/docker/docker.sock
 ENV GOPATH=/opt/go
 ENV GOROOT=/usr/local/go
 
-ENV HERDR_STARTUP_CWD=/workspace
 ENV NPM_CONFIG_PREFIX=/usr/local/npm
 ENV S6_KEEP_ENV=1
+ENV SLEIPNIR_WORKSPACE=/home/ubuntu/workspaces
 ENV TS_STATE_DIR=/var/lib/tailscale
 ENV UV_TOOL_BIN_DIR=/usr/local/uv/bin
 ENV UV_TOOL_DIR=/usr/local/uv/tools

@@ -4,7 +4,7 @@
 
 RC_NAME="${CLAUDE_RC_NAME:-${TS_HOSTNAME:-sleipnir}}"
 
-cd /workspace || exit 1
+cd "${SLEIPNIR_WORKSPACE:-/home/ubuntu/workspaces}" || exit 1
 
 exec s6-setuidgid ubuntu claude remote-control \
     --name "${RC_NAME}" \
