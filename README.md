@@ -141,6 +141,22 @@ Google publishes Android SDK platform-tools, build-tools and the emulator only f
 
 The same goes for build caches. `~/.gradle`, `~/.m2`, `~/.android`, `~/.konan` and SwiftPM's `~/.cache/org.swift.swiftpm` are not volumes: each restart starts them empty, and while the pod runs they count against its ephemeral-storage limit. A Gradle cache can reach several gigabytes, so size the limit for it. Keep these caches off the CephFS workspace, for the same reason Docker's data directory stays off it. A project's own `.gradle` and `.build` directories sit in the repository and persist with it.
 
+### Playwright browsers
+
+Playwright is not in the image. Install it with `npm install -g playwright`, which lands in `/usr/local/npm` and persists there, then `playwright install chromium firefox`. The image sets `PLAYWRIGHT_BROWSERS_PATH=/home/ubuntu/workspaces/.cache/playwright`, so the browsers download onto the workspace volume rather than into `~/.cache`, and `sleipnir-init` creates that directory for `ubuntu` on every start.
+
+Playwright looks for browsers only under `PLAYWRIGHT_BROWSERS_PATH`, so the path must be the same when they are installed and when they launch. A shell, cron job or service that sees a different value, or none, reports the browsers as missing and downloads another copy. To keep the value in shells that do not inherit the container environment, such as a login through Tailscale SSH, export the same path from `~/.zshenv`:
+
+```sh
+export PLAYWRIGHT_BROWSERS_PATH="$HOME/workspaces/.cache/playwright"
+```
+
+If the container sets a different path, change both together.
+
+The browsers' system libraries are the image's job, because an `apt-get install` from a pane is gone after a restart. Playwright 1.63 treats Ubuntu 26.04 as its own `ubuntu26.04` platform, and the image installs that platform's tool, Chromium and Firefox packages, the same set `playwright install-deps chromium firefox` would install. A Playwright upgrade that needs new libraries needs a new image.
+
+`herdr` and `moshi` come from the same place, built with `BRIDGE=false`: their devcontainer bridge exists to reach a Mac's socket over SSH, and Sleipnir has no Mac to borrow from. It runs its own herdr server and its own Moshi daemon.
+
 ### Updating a CLI without rebuilding
 
 `PATH` puts `/home/ubuntu/.local/bin` ahead of `/usr/local/bin`, and the baseline binaries are owned by `ubuntu`. So `herdr update`, `moshi-hook update`, `claude update` and friends all work from inside the pod. Whether an update survives a restart depends on where that tool installs:

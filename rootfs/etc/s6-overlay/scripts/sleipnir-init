@@ -44,6 +44,19 @@ do
     fi
 done
 
+# Playwright browsers live on the workspace volume. Create missing parents as ubuntu
+# so a fresh volume does not end up with a root-owned .cache.
+case "${PLAYWRIGHT_BROWSERS_PATH}" in
+    /*)
+        if [ -d "${PLAYWRIGHT_BROWSERS_PATH}" ]; then
+            chown ubuntu:ubuntu "${PLAYWRIGHT_BROWSERS_PATH}"
+        else
+            s6-setuidgid ubuntu mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" \
+                || echo "sleipnir-init: cannot create ${PLAYWRIGHT_BROWSERS_PATH}" >&2
+        fi
+        ;;
+esac
+
 for DIRECTORY in \
     /home/ubuntu/.gnupg \
     /home/ubuntu/.ssh

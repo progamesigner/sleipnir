@@ -374,20 +374,44 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         curl \
+        fonts-freefont-ttf \
+        fonts-ipafont-gothic \
+        fonts-liberation \
+        fonts-noto-color-emoji \
+        fonts-tlwg-loma-otf \
+        fonts-unifont \
+        fonts-wqy-zenhei \
         git \
         gnupg \
         jq \
         less \
         libargon2-1 \
+        libasound2t64 \
+        libatk-bridge2.0-0t64 \
+        libatk1.0-0t64 \
+        libatspi2.0-0t64 \
+        libavcodec62 \
+        libcairo-gobject2 \
+        libcairo2 \
+        libcups2t64 \
         libcurl4-openssl-dev \
+        libdbus-1-3 \
         libdrm2 \
         libedit2 \
         libexpat1 \
+        libfontconfig1 \
+        libfreetype6 \
         libgbm1 \
+        libgdk-pixbuf-2.0-0 \
+        libglib2.0-0t64 \
         libglu1-mesa \
+        libgtk-3-0t64 \
         libice6 \
         libncurses-dev \
+        libnspr4 \
         libnss3 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
         libpng16-16t64 \
         libpulse0 \
         libpython3-dev \
@@ -395,14 +419,21 @@ RUN apt-get update \
         libsodium23 \
         libsqlite3-0 \
         libx11-6 \
+        libx11-xcb1 \
+        libxcb-shm0 \
         libxcb1 \
         libxcomposite1 \
         libxcursor1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
         libxi6 \
+        libxkbcommon0 \
         libxkbfile1 \
         libxml2-16 \
         libxml2-dev \
         libxrandr2 \
+        libxrender1 \
         libxtst6 \
         libz3-dev \
         locales \
@@ -418,6 +449,9 @@ RUN apt-get update \
         unzip \
         vim \
         wget \
+        xfonts-cyrillic \
+        xfonts-scalable \
+        xvfb \
         xz-utils \
         zip \
         zlib1g-dev \
@@ -502,6 +536,7 @@ ENV KOTLIN_HOME=/opt/kotlin
 ENV SWIFT_HOME=/opt/swift
 
 ENV NPM_CONFIG_PREFIX=/usr/local/npm
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/ubuntu/workspaces/.cache/playwright
 ENV S6_KEEP_ENV=1
 ENV SLEIPNIR_WORKSPACE=/home/ubuntu/workspaces
 ENV TS_STATE_DIR=/var/lib/tailscale
