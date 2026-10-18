@@ -2,6 +2,11 @@
 
 [ "${SLEIPNIR_ENABLE_MOSHI:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
 
+if [ -n "${MOSHI_ALLOWED_HOSTS:-}" ]; then
+    s6-setuidgid ubuntu moshi-hook set allowed-hosts "${MOSHI_ALLOWED_HOSTS}" \
+        || echo "moshi: cannot apply MOSHI_ALLOWED_HOSTS; keeping the stored allowed-hosts" >&2
+fi
+
 exec s6-setuidgid ubuntu moshi-hook \
     --listen "${MOSHI_LISTEN:-0.0.0.0:24544}" \
     --no-open
