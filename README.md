@@ -137,6 +137,7 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `DOTFILES_REPOSITORY` | `https://github.com/progamesigner/dotfiles` | Git repository cloned into `/home/ubuntu/.dotfiles` on startup. |
 | `DOTFILES_INSTALL_SCRIPT` | `install.sh` | Repository-relative installer executed as `ubuntu`. |
 | `MOSHI_LISTEN` | `0.0.0.0:24544` | Moshi web client. |
+| `MOSHI_ALLOWED_HOSTS` | — | Comma-separated hostnames browsers may use for the Moshi web client, such as an Ingress host. Moshi rejects any other `Host` or `Origin`. The service applies it with `moshi-hook set allowed-hosts` on every start, so it replaces the stored list; `none` clears it. Unset leaves the stored list alone. An invalid value is logged and the stored list stays in effect. |
 | `SLEIPNIR_ENABLE_CODE_TUNNEL` | `0` | Set to `1` to run the VS Code tunnel. |
 | `CODE_TUNNEL_NAME` | `sleipnir` | Name shown in vscode.dev. The CLI lowercases the name and accepts only letters, digits and `-`, up to 20 characters, so an uppercase value registers lowercased. |
 | `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. It is also passed as the session name prefix; without it the prefix falls back to the hostname, which under Kubernetes is the pod name unless the pod sets `hostname`. |
