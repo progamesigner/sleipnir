@@ -23,6 +23,10 @@ if [[ ${SLEIPNIR_ENABLE_HERDR:-1} == 1 ]]; then
     check_service herdr
 fi
 
+if [[ ${SLEIPNIR_ENABLE_HERDR_CORE:-1} == 1 ]]; then
+    check_service herdr-core
+fi
+
 if [[ ${SLEIPNIR_ENABLE_MOSHI:-1} == 1 ]]; then
     check_service moshi
     listen=${MOSHI_LISTEN:-0.0.0.0:24544}

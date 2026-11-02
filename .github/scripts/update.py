@@ -224,6 +224,13 @@ CATALOG: list[Dependency] = [
         policy='series',
     ),
     Dependency(
+        name='HERDR_CORE_VERSION',
+        kind='tags',
+        source='herdrdev/herdr-core',
+        prefix='v',
+        policy='major',
+    ),
+    Dependency(
         name='HERDR_VERSION',
         kind='releases',
         source='herdrdev/herdr',

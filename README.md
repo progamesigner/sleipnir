@@ -1,6 +1,6 @@
 # Sleipnir
 
-One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) manages the panes, [Moshi](https://getmoshi.app) reports to the phone, Tailscale carries the traffic, and agent CLIs sit ready to be spawned into panes.
+One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) manages the panes (both the classic `herdr` server and the new `herdr-core` that the Herdr desktop app connects to), [Moshi](https://getmoshi.app) reports to the phone, Tailscale carries the traffic, and agent CLIs sit ready to be spawned into panes.
 
 ## What runs inside
 
@@ -12,6 +12,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | `tailscaled` | longrun | `SLEIPNIR_ENABLE_TAILSCALE` (default 0) | container exits, Kubernetes restarts it |
 | `tailscale-up` | oneshot | `SLEIPNIR_ENABLE_TAILSCALE` | — |
 | `herdr` | longrun | `SLEIPNIR_ENABLE_HERDR` (default 1) | container exits |
+| `herdr-core` | longrun | `SLEIPNIR_ENABLE_HERDR_CORE` (default 1) | s6 restarts it; its terminals keep running |
 | `moshi` | longrun | `SLEIPNIR_ENABLE_MOSHI` (default 1) | s6 restarts it |
 | `code-tunnel` | longrun | `SLEIPNIR_ENABLE_CODE_TUNNEL` (default 0) | s6 restarts it |
 | `rc-agy` | longrun | `SLEIPNIR_ENABLE_RC_AGY` (default 0) | s6 restarts it |
@@ -32,6 +33,10 @@ Its status screen redraws about once a second, and with no TTY under s6 every re
 `rc-agy` needs a detour. On Linux `agy remote-control start` writes a systemd user unit and hands it to `systemctl --user`, which cannot work here: there is no systemd and no session bus, so it fails at `daemon-reload`. The unit it writes points at `agy remote-control serve`, an undocumented foreground subcommand, and that is what the service runs directly under s6 — no systemd involved. The rest of the unit's semantics move into the service directory: `finish` stops the service for good on exit 3 (the unit's `RestartPreventExitStatus`) and otherwise sleeps 10s before s6 restarts it (`RestartSec`), with `timeout-finish` raised to 15s so that sleep survives. The sleep is skipped when the service is being stopped on purpose, so shutting the container down does not wait on it. The name shown in Antigravity Remote Control is set once with `agy remote-control start --name <name>` — it records the name before the systemd step fails — and persists in `~/.gemini/config/config.json`, which is on a PVC.
 
 Set `SLEIPNIR_RC_CODEX_HOME` to an absolute directory such as `/home/ubuntu/.codex-rc` to give `rc-codex` its own Codex home and control socket. Ordinary `codex` launches keep using their normal `CODEX_HOME`, so they do not discover the remote-control daemon. The service uses this directory for both start and stop. Leave the variable unset or empty to retain the existing Codex home and shared daemon behavior. An isolated home also has separate authentication, configuration, and session state; sign in and configure that home before enabling the service.
+
+Herdr now ships in two lines. The classic `herdr` (0.9.x) is a terminal UI with its own server; Ghostty and other terminals reach it over SSH through `herdr remote-client-bridge`. The new line splits that in two: [herdr-core](https://github.com/herdrdev/herdr-core) (`hc`, `herdr-core`) is a headless daemon that owns terminals and draws nothing, and [herdr-app](https://github.com/herdrdev/herdr-app) is a desktop window (Vulkan, a desktop session required) that talks to a core locally or on an SSH machine. Sleipnir has no desktop, so it carries only the core; add the pod in the app under Settings → Machines with the same SSH target you use for `ssh`. The two lines keep separate terminals and state: a pane in `herdr` does not show up in the app, nor the reverse.
+
+The `herdr-core` service runs `herdr-core serve` in the foreground under s6. Without it the app's first `ssh … herdr-core connect` would start a core itself, and that core would inherit Tailscale SSH's bare environment: no `LANG`, so the shells in its terminals run in the C locale and `ls` prints UTF-8 file names as `$'\345…'` escapes, and a `PATH` without the agent CLIs. Holders own the terminals, so restarting the service, or `hc update`, leaves programs running. When another core already holds the session lock (after `hc update` restarted it from a shell), the service waits for it to end rather than restarting every second. For the same reason, the image appends the build-time `LANG`, `LC_ALL` and, for SSH sessions only, `PATH` to `/etc/zsh/zshenv`, so commands run over Tailscale SSH resolve `herdr-core` and other tools the same way the services do.
 
 The three `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it is not in a pane, so neither herdr nor Moshi can see it. By default the services share the respective CLI home directories with pane sessions; `SLEIPNIR_RC_CODEX_HOME` can separate Codex's home.
 
@@ -122,6 +127,8 @@ Each language also needs the thing that actually installs its dependencies, othe
 
 - into `~/.local/bin` — persists, that path is on a PVC
 - in place over `/usr/local/bin` — lost on restart, back to the image's version
+
+`hc update` replaces the `herdr-core` it runs from, which is the image's `/usr/local/bin` copy unless `~/.local/bin` overrides it. To keep a newer core across restarts, install it with `curl -fsSL https://releases.herdr.dev/core/install.sh | sh`, which writes `~/.local/bin/herdr-core`.
 
 Delete the override in `~/.local/bin` to fall back to the image baseline.
 
@@ -235,6 +242,8 @@ Each agent keeps its own credentials, so each gets its own volume. On every star
 | `/home/ubuntu/.config/opencode` | OpenCode configuration |
 | `/home/ubuntu/.local/share/opencode` | OpenCode **data** — a separate directory from the config |
 | `/home/ubuntu/.config/herdr` | herdr socket, config, logs |
+| `/home/ubuntu/.config/herdr-core` | herdr-core `config.toml` and templates |
+| `/home/ubuntu/.local/state/herdr-core` | herdr-core socket, terminal records, saved screens, machines; created `0700` because screens may hold secrets |
 | `/home/ubuntu/.config/moshi` | Moshi settings |
 | `/home/ubuntu/.local/state/moshi` | Moshi **pairing secret** — lose it and you pair the phone again |
 | `/home/ubuntu/.local/bin` | CLI updates that outlive a restart |
@@ -267,7 +276,7 @@ done < versions
 docker buildx build "${build_args[@]}" --platform linux/amd64,linux/arm64 -t ghcr.io/progamesigner/sleipnir:latest .
 ```
 
-Release assets disagree about how to spell an architecture, so the Dockerfile maps `TARGETARCH` per tool: s6-overlay wants `x86_64`/`aarch64`, Tailscale takes `amd64`/`arm64` unchanged, the VS Code CLI wants `x64`/`arm64`, and inside the feature installers herdr uses `aarch64` where moshi-hook uses `arm64`.
+Release assets disagree about how to spell an architecture, so the Dockerfile maps `TARGETARCH` per tool: s6-overlay wants `x86_64`/`aarch64`, Tailscale takes `amd64`/`arm64` unchanged, the VS Code CLI wants `x64`/`arm64`, and inside the feature installers herdr uses `aarch64` where moshi-hook uses `arm64`. herdr-core comes straight from `releases.herdr.dev`; its stage reads the version's `manifest.json`, picks `linux-x86_64` or `linux-aarch64`, and checks the archive's SHA-256 against it.
 
 Schedule the pods onto the x86 nodes. A Raspberry Pi will not carry multiple agent CLIs.
 

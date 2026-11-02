@@ -1,0 +1,13 @@
+#!/command/with-contenv sh
+
+[ "${SLEIPNIR_ENABLE_HERDR_CORE:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+
+cd /home/ubuntu || exit 1
+
+# Wait out a core started elsewhere (e.g. `hc update`); serve would just exit and s6 would loop
+lock="${XDG_STATE_HOME:-/home/ubuntu/.local/state}/herdr-core/${HC_SESSION:-default}/core.lock"
+while [ -e "${lock}" ] && ! s6-setuidgid ubuntu flock --nonblock "${lock}" true ; do
+    sleep 10
+done
+
+exec s6-setuidgid ubuntu herdr-core serve

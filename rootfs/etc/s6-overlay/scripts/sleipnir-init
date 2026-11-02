@@ -10,6 +10,7 @@ for DIRECTORY in \
     /home/ubuntu/.config \
     /home/ubuntu/.config/gh \
     /home/ubuntu/.config/herdr \
+    /home/ubuntu/.config/herdr-core \
     /home/ubuntu/.config/moshi \
     /home/ubuntu/.config/opencode \
     /home/ubuntu/.copilot \
@@ -46,6 +47,7 @@ done
 
 for DIRECTORY in \
     /home/ubuntu/.gnupg \
+    /home/ubuntu/.local/state/herdr-core \
     /home/ubuntu/.ssh
 do
     install -d -o ubuntu -g ubuntu -m 0700 ${DIRECTORY}

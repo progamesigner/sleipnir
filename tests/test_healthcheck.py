@@ -27,6 +27,7 @@ class HealthcheckTests(unittest.TestCase):
         self.env = {
             "PATH": "/usr/bin:/bin",
             "SLEIPNIR_ENABLE_HERDR": "0",
+            "SLEIPNIR_ENABLE_HERDR_CORE": "0",
             "SLEIPNIR_ENABLE_MOSHI": "0",
             "SLEIPNIR_ENABLE_TAILSCALE": "1",
         }
@@ -90,6 +91,14 @@ class HealthcheckTests(unittest.TestCase):
         self.env["SLEIPNIR_ENABLE_TAILSCALE"] = "0"
         self.supervisor.unlink()
         self.assertEqual(self.run_check("ready").returncode, 0)
+
+    def test_herdr_core_service(self):
+        self.env.update(SLEIPNIR_ENABLE_TAILSCALE="0", SLEIPNIR_ENABLE_HERDR_CORE="1")
+        self.assertEqual(self.run_check().returncode, 0)
+        self.env["TEST_SERVICE_UP"] = "false"
+        result = self.run_check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("herdr-core is down", result.stderr)
 
     def test_moshi_loopback_and_closed_port(self):
         self.env.update(SLEIPNIR_ENABLE_TAILSCALE="0", SLEIPNIR_ENABLE_MOSHI="1")

@@ -126,6 +126,27 @@ COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/f
 
 RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
 
+FROM installer AS herdr-core
+
+ARG TARGETARCH
+
+ARG HERDR_CORE_VERSION=none
+
+RUN case "${TARGETARCH}" in \
+        amd64) HC_TARGET=linux-x86_64 ;; \
+        arm64) HC_TARGET=linux-aarch64 ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2 ; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/manifest.json https://releases.herdr.dev/core/${HERDR_CORE_VERSION}/manifest.json \
+ && HC_URL="$(jq -er --arg target "${HC_TARGET}" '.targets[$target].url' /tmp/manifest.json)" \
+ && HC_SHA256="$(jq -er --arg target "${HC_TARGET}" '.targets[$target].sha256' /tmp/manifest.json)" \
+ && curl -fsSL -o /tmp/herdr-core.tar.gz "${HC_URL}" \
+ && echo "${HC_SHA256}  /tmp/herdr-core.tar.gz" | sha256sum --check --strict - \
+ && tar -C /tmp -xzf /tmp/herdr-core.tar.gz herdr-core \
+ && install -D -m 0755 /tmp/herdr-core /usr/local/bin/herdr-core \
+ && /usr/local/bin/herdr-core --version \
+ && rm -f /tmp/manifest.json /tmp/herdr-core.tar.gz /tmp/herdr-core
+
 FROM installer AS moshi
 
 ARG MOSHI_VERSION=latest
@@ -339,6 +360,7 @@ COPY --from=github-cli /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=kubectl /usr/local/bin/kubectl /usr/local/bin/kubectl
 COPY --from=k9s /usr/local/bin/k9s /usr/local/bin/k9s
 COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
+COPY --from=herdr-core /usr/local/bin/herdr-core /usr/local/bin/herdr-core
 COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
 COPY --from=supercronic /supercronic /usr/local/bin/supercronic
 COPY --from=uv /uv /uvx /usr/local/bin/
@@ -360,13 +382,14 @@ RUN set -eu ; \
     for directory in antigravity-cli claude-code codex copilot-cli opencode ; do \
         chown -R ubuntu:ubuntu /usr/local/share/${directory} ; \
     done \
- && for binary in code herdr moshi-hook tailscale tailscaled uv uvx ; do \
+ && ln -s herdr-core /usr/local/bin/hc \
+ && for binary in code herdr herdr-core moshi-hook tailscale tailscaled uv uvx ; do \
         if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
     done \
  && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/npm /usr/local/npm/bin /usr/local/npm/lib /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
     export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
-    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go herdr k9s kubectl make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
+    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go hc herdr herdr-core k9s kubectl make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
     done ; \
     if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \
@@ -389,6 +412,14 @@ ENV LC_ALL=C.utf8
 ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV SHELL=/usr/bin/zsh
 
+# Tailscale SSH skips the image ENV; give its zsh sessions the same locale and PATH as s6
+RUN printf '%s\n' \
+        '' \
+        '# Sleipnir: the image environment for SSH sessions' \
+        "export LANG=\"\${LANG:-${LANG}}\" LC_ALL=\"\${LC_ALL:-${LC_ALL}}\"" \
+        "[[ -n \$SSH_CONNECTION && :\$PATH: != *:/command:* ]] && export PATH=\"${PATH}\"" \
+        >> /etc/zsh/zshenv
+
 ENV CARGO_HOME=/usr/local/cargo
 ENV DOCKER_HOST=unix:///run/docker/docker.sock
 ENV GOPATH=/opt/go
@@ -404,6 +435,7 @@ ENV UV_TOOL_DIR=/usr/local/uv/tools
 ENV SLEIPNIR_ENABLE_CODE_TUNNEL=0
 ENV SLEIPNIR_ENABLE_DOTFILES=0
 ENV SLEIPNIR_ENABLE_HERDR=1
+ENV SLEIPNIR_ENABLE_HERDR_CORE=1
 ENV SLEIPNIR_ENABLE_MOSHI=1
 ENV SLEIPNIR_ENABLE_RC_AGY=0
 ENV SLEIPNIR_ENABLE_RC_CLAUDE=0
