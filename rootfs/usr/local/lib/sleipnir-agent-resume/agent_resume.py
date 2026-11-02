@@ -3,7 +3,8 @@
 
 Vendored from https://github.com/thuanlm215/herdr-agent-resume
 Revision: 64eed1df775c512c680e45bc05953b1b52f1aafc (MIT; see LICENSE).
-Local changes: feature gate, container generation, scoped runtime locks/logs, keep resumed Codex inside hc with --no-daemon.
+Local changes: feature gate, container generation, scoped runtime locks/logs,
+Codex --no-daemon, bounded core-readiness retries and serialized session claims.
 
 herdr-core brings a terminal that lost its program (reboot, logout, a core
 restart) back as a shell in its last folder, but never runs the program again.
@@ -119,6 +120,8 @@ EXIT_GRACE = 2.0     # after an agent exits, wait this long before deciding it q
 VERIFY_WAIT = 5.0    # after typing, how long `resume` gives agents before checking they started
 QUICK_EXIT = 10.0    # an agent `here` started that exits sooner than this, with an error, failed
 HOOK_HC_TIMEOUT = 3  # the agent waits for its hook: never hold it up long
+HERE_WAIT = 60.0     # recovery shells can start before core accepts requests
+CORE_UNAVAILABLE = 75  # temporary failure: retain the shell's precmd hook
 LOG_LIMIT = 256 * 1024
 
 NOT_STARTED = "shell not started yet"
@@ -127,6 +130,10 @@ EXITED = "exited right away"
 
 
 class HcError(Exception):
+    pass
+
+
+class CoreUnavailable(HcError):
     pass
 
 
@@ -373,6 +380,27 @@ def hc_json(args, timeout=10):
         return json.loads(hc([*args, "--json"], timeout=timeout))
     except ValueError as error:
         raise HcError(f"hc {args[0]}: not JSON") from error
+
+
+def recovery_terminal(term, wait=HERE_WAIT):
+    """Retry only the read, before claiming or starting an agent. Each attempt and
+    the entire readiness wait are bounded; native SessionStart hooks stay fast."""
+    deadline = time.monotonic() + wait
+    delay, attempts = 0.25, 0
+    while True:
+        attempts += 1
+        try:
+            terminal = hc_json(["get", term], timeout=min(HOOK_HC_TIMEOUT, max(0.001, deadline - time.monotonic())))
+        except HcError as error:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CoreUnavailable(f"core not ready after {wait:g}s; retry at the next prompt: {error}") from error
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, 2.0)
+        else:
+            if attempts > 1:
+                log("core-ready", terminal=term, attempts=attempts)
+            return terminal
 
 
 def valid_session(value):
@@ -853,22 +881,17 @@ def claim_holder(agent, session):
 def claim(agent, session):
     """Mark the session as being resumed by this process (which becomes the agent).
     False when another live agent already holds it."""
+    # O_EXCL alone exposes an empty claim before its PID is written. Serialize
+    # readers and writers so another shell cannot mistake that claim for stale.
+    import fcntl
     path = _claim_path(agent, session)
-    for _ in range(2):
-        try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            if claim_holder(agent, session):
-                return False
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-            continue
-        with os.fdopen(fd, "w") as f:
+    with open(path + ".lock", "a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        if claim_holder(agent, session):
+            return False
+        with open(path, "w") as f:
             f.write(_stamp(os.getpid()) or str(os.getpid()))
         return True
-    return False
 
 
 def decide_here(terminal, shell_pid, boot, folder_ok=os.path.isdir, file_ok=os.path.isfile):
@@ -1024,7 +1047,7 @@ def here(env=None, shell_pid=None):
         return "not in a Herdr terminal"
     if env.get("AGENT_RESUME_AUTO") == "0":
         return "turned off"
-    terminal = hc_json(["get", term], timeout=HOOK_HC_TIMEOUT)
+    terminal = recovery_terminal(term)
     label, why = decide_here(terminal, shell_pid or os.getppid(), boot_id())
     if why:
         return why
@@ -1123,6 +1146,10 @@ def main(argv):
     if command_name == "here":
         try:
             outcome = here()
+        except CoreUnavailable as error:
+            log("core-unavailable", terminal=os.environ.get("HC_TERMINAL_ID"), outcome=str(error))
+            sys.stderr.write(f"agent-resume: {error}\n")
+            return CORE_UNAVAILABLE
         except Exception as error:  # never break the shell starting up
             outcome = f"error: {error}"
         if isinstance(outcome, int):
