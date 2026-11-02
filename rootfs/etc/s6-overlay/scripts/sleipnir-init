@@ -56,3 +56,7 @@ done
 [ -e /home/ubuntu/.claude/.claude.json ] || install -o ubuntu -g ubuntu -m 0644 /dev/null /home/ubuntu/.claude/.claude.json
 ln -sf /home/ubuntu/.claude/.claude.json /home/ubuntu/.claude.json
 chown -h ubuntu:ubuntu /home/ubuntu/.claude.json
+
+# A container restart on the same node must not look like the same boot.
+install -d -m 0755 /run/sleipnir
+cat /proc/sys/kernel/random/uuid > /run/sleipnir/agent-resume-generation

@@ -10,4 +10,10 @@ while [ -e "${lock}" ] && ! s6-setuidgid ubuntu flock --nonblock "${lock}" true 
     sleep 10
 done
 
+# Hooks are installed after dotfiles and before any recovered shell starts.
+if [ "${SLEIPNIR_ENABLE_AGENT_RESUME:-0}" = "1" ]; then
+    s6-setuidgid ubuntu python3 /usr/local/lib/sleipnir-agent-resume/setup.py || \
+        echo "sleipnir: agent resume hook setup failed; starting core without new hooks" >&2
+fi
+
 exec s6-setuidgid ubuntu herdr-core serve
