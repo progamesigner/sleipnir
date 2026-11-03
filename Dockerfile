@@ -415,12 +415,21 @@ ENV LC_ALL=C.utf8
 ENV PATH=/home/ubuntu/.local/bin:/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:/command:/usr/bin:/bin:/usr/sbin:/sbin
 ENV SHELL=/usr/bin/zsh
 
-# Tailscale SSH skips the image ENV; give its zsh sessions the same locale and PATH as s6
+# Tailscale SSH skips the image ENV and the pod env; give its zsh sessions the same locale, PATH and pod env as s6
 RUN printf '%s\n' \
         '' \
         '# Sleipnir: the image environment for SSH sessions' \
         "export LANG=\"\${LANG:-${LANG}}\" LC_ALL=\"\${LC_ALL:-${LC_ALL}}\"" \
         "[[ -n \$SSH_CONNECTION && :\$PATH: != *:/command:* ]] && export PATH=\"${PATH}\"" \
+        '# Sleipnir: the pod environment s6 saved at boot, for variables the SSH session lacks' \
+        'if [[ -n $SSH_CONNECTION && -d /run/s6/basedir/env ]]; then' \
+        '    for _sleipnir_f in /run/s6/basedir/env/*(N.r); do' \
+        '        _sleipnir_n=${_sleipnir_f:t}' \
+        '        case $_sleipnir_n in PWD|HOME|SHELL|PATH|S6_KEEP_ENV|TS_AUTHKEY) continue ;; esac' \
+        '        [[ -n ${(P)_sleipnir_n+x} ]] || export "$_sleipnir_n=$(<$_sleipnir_f)"' \
+        '    done' \
+        '    unset _sleipnir_f _sleipnir_n' \
+        'fi' \
         >> /etc/zsh/zshenv
 
 ENV CARGO_HOME=/usr/local/cargo
