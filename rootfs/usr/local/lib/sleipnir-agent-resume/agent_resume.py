@@ -4,14 +4,16 @@
 Vendored from https://github.com/thuanlm215/herdr-agent-resume
 Revision: 64eed1df775c512c680e45bc05953b1b52f1aafc (MIT; see LICENSE).
 Local changes: feature gate, container generation, scoped runtime locks/logs,
-Codex --no-daemon, bounded core-readiness retries and serialized session claims.
+Codex --no-daemon, bounded core-readiness retries, serialized session claims,
+and GitHub Copilot CLI and OpenCode V2 support.
 
 herdr-core brings a terminal that lost its program (reboot, logout, a core
 restart) back as a shell in its last folder, but never runs the program again.
 This brings agent sessions back, the way the Herdr TUI did:
 
   hook <agent>        note the session on its terminal (an `agent-resume` label
-                      kept by herdr-core). Agents: claude, codex, grok, agy, pi, kiro
+                      kept by herdr-core). Agents: claude, codex, copilot, opencode,
+                      grok, agy, pi, kiro
   resume              type that agent's resume command into each terminal that
                       lost its agent and sits at a shell
   status              what `resume` would do, without typing anything
@@ -44,6 +46,9 @@ LABEL = "agent-resume"
 AGENTS = {
     "claude": {"names": {"claude"}, "argv": lambda session: ["claude", "--resume", session]},
     "codex": {"names": {"codex"}, "argv": lambda session: ["codex", "resume", session]},
+    # Copilot's main process is named MainThread; its argv[0] stays "copilot".
+    "copilot": {"names": {"copilot"}, "argv": lambda session: ["copilot", f"--resume={session}"]},
+    "opencode": {"names": {"opencode"}, "argv": lambda session: ["opencode", "--session", session]},
     "grok": {"names": {"grok"}, "argv": lambda session: ["grok", "--resume", session]},
     "agy": {"names": {"agy"}, "argv": lambda session: ["agy", "--conversation", session]},
     "pi": {"names": {"pi"}, "argv": lambda session: ["pi", "--session", session]},
@@ -71,6 +76,24 @@ KEEP_FLAGS = {
         "-c": 1, "--config": 1, "-m": 1, "--model": 1, "-p": 1, "--profile": 1, "-s": 1, "--sandbox": 1,
         "-a": 1, "--ask-for-approval": 1, "--add-dir": 1, "--enable": 1, "--disable": 1,
         "--local-provider": 1,
+    },
+    "copilot": {
+        "--allow-all-tools": 0, "--allow-all-paths": 0, "--allow-all-urls": 0, "--allow-all": 0,
+        "--yolo": 0, "--autopilot": 0, "--plan": 0, "--experimental": 0, "--no-experimental": 0,
+        "--no-custom-instructions": 0, "--no-ask-user": 0, "--disable-builtin-mcps": 0,
+        "--enable-all-github-mcp-tools": 0, "--allow-all-mcp-server-instructions": 0,
+        "--disallow-temp-dir": 0, "--assisted-approval": 0, "--screen-reader": 0, "--plain-diff": 0,
+        "--no-color": 0, "--no-mouse": 0, "--no-bash-env": 0, "--enable-memory": 0,
+        "--model": 1, "--reasoning-effort": 1, "--context": 1, "--auto-tier": 1, "--agent": 1,
+        "--mode": 1, "--add-dir": 1, "--plugin-dir": 1, "--log-dir": 1, "--log-level": 1,
+        "--disable-mcp-server": 1, "--enable-mcp-server": 1, "--additional-mcp-config": 1,
+        "--max-autopilot-continues": 1, "--add-github-mcp-tool": 1, "--add-github-mcp-toolset": 1,
+        "--allow-tool": "+", "--deny-tool": "+", "--available-tools": "+", "--excluded-tools": "+",
+        "--allow-url": "+", "--deny-url": "+", "--secret-env-vars": "+",
+    },
+    "opencode": {
+        "--auto": 0, "--standalone": 0,
+        "--server": 1,
     },
     "grok": {
         "--always-approve": 0, "--debug": 0, "--disable-web-search": 0, "--fullscreen": 0,
@@ -469,6 +492,27 @@ def runtime_lock(name):
     return fd
 
 
+def opencode_has(session, database):
+    """True unless OpenCode's database readably lacks this session."""
+    import sqlite3
+    try:
+        db = sqlite3.connect(f"file:{quote(database)}?mode=ro", uri=True, timeout=1)
+        try:
+            return db.execute("SELECT 1 FROM session_v2 WHERE id = ? LIMIT 1", (session,)).fetchone() is not None
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return True  # A schema change must not block a resume; OpenCode reports a missing session.
+
+
+def has_conversation(label, file_ok=os.path.isfile, opencode_ok=opencode_has):
+    """True when the label's saved conversation is still there to resume."""
+    transcript = label.get("transcript")
+    if not file_ok(transcript):
+        return False
+    return label["agent"] != "opencode" or opencode_ok(label["session"], transcript)
+
+
 # ---------------------------------------------------------------- hook
 
 def _text(data, *keys):
@@ -503,6 +547,13 @@ def is_session_event(agent, data):
 def default_transcript(agent, session, cwd, home=None):
     """Where this agent stores the conversation, when the hook didn't say."""
     home = home or os.path.expanduser("~")
+    if agent == "copilot":
+        root = os.environ.get("COPILOT_HOME") or os.path.join(home, ".copilot")
+        return os.path.join(root, "session-state", session, "events.jsonl")
+    if agent == "opencode":
+        # V2 keeps every session in one SQLite database; see has_conversation.
+        data = os.environ.get("XDG_DATA_HOME") or os.path.join(home, ".local", "share")
+        return os.path.join(data, "opencode", "opencode.db")
     if agent == "grok" and isinstance(cwd, str) and cwd:
         return os.path.join(home, ".grok", "sessions", quote(cwd, safe=""), session, "updates.jsonl")
     if agent == "agy":
@@ -568,6 +619,8 @@ def hook(agent, raw, env=None):
     agent_pid = find_agent(agent, os.getppid())
     if agent_pid is None and agent == "claude" and str(env.get("CLAUDE_PID", "")).isdigit():
         agent_pid = int(env["CLAUDE_PID"])
+    if agent_pid is None and agent == "copilot" and str(env.get("COPILOT_LOADER_PID", "")).isdigit():
+        agent_pid = int(env["COPILOT_LOADER_PID"])
     terminal = hc_json(["get", term], timeout=HOOK_HC_TIMEOUT)
     shell = terminal.get("pid")
     if terminal.get("state") != "live" or not shell:
@@ -751,7 +804,7 @@ def plan(terminals, boot, folder_ok=os.path.isdir, file_ok=os.path.isfile):
             reason = BY_SHELL if starting_agent(terminal, label["agent"]) else "something else is running there"
         elif not folder_ok(label.get("cwd")):
             reason = "its folder is gone"
-        elif not file_ok(label.get("transcript")):
+        elif not has_conversation(label, file_ok):
             reason = "no saved conversation to resume"
         elif typed is None:
             reason = "its folder name can't be typed safely"
@@ -906,7 +959,7 @@ def decide_here(terminal, shell_pid, boot, folder_ok=os.path.isdir, file_ok=os.p
         return None, "agent not lost"
     if not folder_ok(label.get("cwd")):
         return None, "its folder is gone"
-    if not file_ok(label.get("transcript")):
+    if not has_conversation(label, file_ok):
         return None, "no saved conversation to resume"
     return label, None
 
@@ -1128,7 +1181,8 @@ def main(argv):
             if outcome != "not in a Herdr terminal":
                 log("hook", agent=agent, terminal=os.environ.get("HC_TERMINAL_ID"), outcome=outcome)
         # Antigravity reads stdout as JSON. Pi's extension reads this one line and
-        # shows it to nobody. Every other agent would treat stdout as context, so stay quiet.
+        # shows it to nobody. Every other agent (Copilot included) would treat stdout
+        # as context, and OpenCode's TUI plugin ignores it, so stay quiet.
         if agent == "agy":
             sys.stdout.write("{}\n")
         elif agent == "pi":
