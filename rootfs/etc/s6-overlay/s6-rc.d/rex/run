@@ -1,0 +1,23 @@
+#!/command/with-contenv sh
+
+[ "${SLEIPNIR_ENABLE_REX:-0}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+
+# The image does not ship Rex; it runs a binary someone placed on a volume.
+rex="${SLEIPNIR_REX_BIN:-/home/ubuntu/.local/bin/rex}"
+if [ ! -x "${rex}" ]; then
+    echo "sleipnir: no executable Rex at ${rex}; the rex service stays down" >&2
+    s6-svc -O .
+    exit 0
+fi
+
+cd /home/ubuntu || exit 1
+
+# Wait out a server started elsewhere (e.g. a CLI autostart); run would just exit and s6 would loop
+while s6-setuidgid ubuntu "${rex}" --autostart=false --timeout 3s server status >/dev/null 2>&1 ; do
+    sleep 10
+done
+
+# SLEIPNIR_REX_ARGS is split on whitespace into extra `rex server run` options
+set -f
+# shellcheck disable=SC2086
+exec s6-setuidgid ubuntu "${rex}" server run ${SLEIPNIR_REX_ARGS:-}

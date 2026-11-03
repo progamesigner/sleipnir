@@ -21,6 +21,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | `rc-claude-log` | longrun | always; logger for `rc-claude` | s6 restarts it |
 | `rc-codex` | longrun | `SLEIPNIR_ENABLE_RC_CODEX` (default 0) | s6 restarts it |
 | `scheduler` | longrun | `SLEIPNIR_ENABLE_SCHEDULER` (default 0) | s6 restarts it |
+| `rex` | longrun | `SLEIPNIR_ENABLE_REX` (default 0) and a Rex binary on a volume | s6 restarts it |
 
 Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tree runs as root, which is s6-overlay's normal arrangement.
 
@@ -52,6 +53,10 @@ The three `rc-*` services exist so the agent CLIs own mobile apps keep working. 
 `scheduler` runs a user-authored crontab with [Supercronic](https://github.com/aptible/supercronic). Supercronic fits the container better than `cron` or a systemd timer: PID 1 is `s6-svscan`, systemd is offline, and Supercronic is one static binary that logs to stdout without needing root or setuid. The service validates the crontab, drops to `ubuntu`, and watches the file for changes, including Kubernetes ConfigMap atomic updates.
 
 The default crontab is `/etc/sleipnir/scheduler/crontab`; override it with `SLEIPNIR_SCHEDULER_CRONTAB`. One file can hold any number of jobs and may set `CRON_TZ` itself. Commands should use absolute paths. They start in `/home/ubuntu` unless `SLEIPNIR_SCHEDULER_WORKDIR` says otherwise. A missing or empty crontab brings the service down cleanly because having nothing scheduled is a normal state.
+
+`rex` runs a [Rex](https://www.superlogical.com/rex) server as `ubuntu`. The image does not include Rex: it is in limited testing and not ours to redistribute, so the service runs whatever binary sits at `SLEIPNIR_REX_BIN` (default `/home/ubuntu/.local/bin/rex`, which is on a volume). Install it there yourself with the instructions Superlogical gives testers. Without an executable there, the service logs one line and stays down, and the health check ignores it either way. When another Rex server already holds the socket — the `rex` CLI starts one on its own unless given `--autostart=false` — the service waits for that server to end instead of restarting every second.
+
+`SLEIPNIR_REX_ARGS` adds options to `rex server run`. By default the server listens only on its Unix socket, `/home/ubuntu/.local/state/rex/run/server.sock`; reaching it from another device needs a network listener such as `--extra-listen tailnet-serve://…` plus `tailscale serve` (see Superlogical's remote access docs). A connection gets everything the server can do, including running programs as `ubuntu`, so open it only to the people your tailnet ACLs already trust with this pod. Saved sessions live in `/home/ubuntu/.local/state/rex`; mount a volume there (see [Volumes](#volumes)) to keep them across restarts. Running programs still end with the container. To let Moshi list Rex sessions, run `moshi-hook set rex-server /home/ubuntu/.local/state/rex/run/server.sock` once; the setting lives in `/home/ubuntu/.config/moshi`.
 
 ## Agent CLIs
 
@@ -162,6 +167,9 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `SLEIPNIR_ENABLE_SCHEDULER` | `0` | Set to `1` to run the scheduler. |
 | `SLEIPNIR_SCHEDULER_CRONTAB` | `/etc/sleipnir/scheduler/crontab` | Authored crontab to validate, watch and run. Mount a file here or point to another path. |
 | `SLEIPNIR_SCHEDULER_WORKDIR` | `/home/ubuntu` | Working directory inherited by scheduled commands. Prefer absolute command paths in the crontab. |
+| `SLEIPNIR_ENABLE_REX` | `0` | Set to `1` to run a Rex server from `SLEIPNIR_REX_BIN`. |
+| `SLEIPNIR_REX_BIN` | `/home/ubuntu/.local/bin/rex` | Rex binary to run. The image does not provide one. |
+| `SLEIPNIR_REX_ARGS` | — | Extra `rex server run` options, split on whitespace, such as `--extra-listen` or `--state-dir`. |
 ### Tailscale
 
 `tailscaled` keeps its identity and SSH host keys in `TS_STATE_DIR` (default
@@ -253,6 +261,7 @@ Each agent keeps its own credentials, so each gets its own volume. On every star
 | `/home/ubuntu/.config/herdr` | herdr socket, config, logs |
 | `/home/ubuntu/.config/herdr-core` | herdr-core `config.toml` and templates |
 | `/home/ubuntu/.local/state/herdr-core` | herdr-core socket, terminal records, saved screens, machines; created `0700` because screens may hold secrets |
+| `/home/ubuntu/.local/state/rex` | Rex saved sessions, host identity and socket; created `0700`, the mode Rex uses itself, because sessions may hold secrets |
 | `/home/ubuntu/.config/moshi` | Moshi settings |
 | `/home/ubuntu/.local/state/moshi` | Moshi **pairing secret** — lose it and you pair the phone again |
 | `/home/ubuntu/.local/bin` | CLI updates that outlive a restart |
