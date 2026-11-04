@@ -189,6 +189,13 @@ CATALOG: list[Dependency] = [
         policy='major',
     ),
     Dependency(
+        name='OSEWA_VERSION',
+        kind='releases',
+        source='rjyo/osewa',
+        prefix='v',
+        policy='major',
+    ),
+    Dependency(
         name='SUPERCRONIC_VERSION',
         kind='releases',
         source='aptible/supercronic',

@@ -1,6 +1,7 @@
 #!/command/with-contenv sh
 
 for DIRECTORY in \
+    /home/ubuntu/.config/osewa \
     /home/ubuntu/.gnupg \
     /home/ubuntu/.ssh
 do

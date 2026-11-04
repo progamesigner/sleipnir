@@ -14,6 +14,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | `herdr` | longrun | `SLEIPNIR_ENABLE_HERDR` (default 1) | container exits |
 | `herdr-core` | longrun | `SLEIPNIR_ENABLE_HERDR_CORE` (default 1) | s6 restarts it; its terminals keep running |
 | `moshi` | longrun | `SLEIPNIR_ENABLE_MOSHI` (default 1) | s6 restarts it |
+| `osewa` | longrun | `SLEIPNIR_ENABLE_OSEWA` (default 1) | s6 restarts it; its sessions keep running |
 | `code-tunnel` | longrun | `SLEIPNIR_ENABLE_CODE_TUNNEL` (default 0) | s6 restarts it |
 | `rc-agy` | longrun | `SLEIPNIR_ENABLE_RC_AGY` (default 0) | s6 restarts it |
 | `rc-agy-log` | longrun | always; logger for `rc-agy` | s6 restarts it |
@@ -48,6 +49,12 @@ The Python runtime is vendored from [herdr-agent-resume](https://github.com/thua
 
 The three `rc-*` services exist so the agent CLIs own mobile apps keep working. A session started that way is a **separate process** from the ones herdr spawns into panes: it is not in a pane, so neither herdr nor Moshi can see it. By default the services share the respective CLI home directories with pane sessions; `SLEIPNIR_RC_CODEX_HOME` can separate Codex's home.
 
+
+`osewa` runs the [osewa](https://osewa.dev) host server in the foreground, so its log goes to the container log. `osewa service install` and `osewa login --service` would write a systemd user unit, which cannot work here for the same reason as `rc-agy`, so s6 is the service manager instead. Each session lives in its own process, so a server restart does not end the sessions. osewa has no config file; the service passes `--listen` and `--name` from `OSEWA_LISTEN` and `OSEWA_NAME`.
+
+The server key and the `devices` allow list live in `~/.config/osewa`. osewa refuses a key file that others can read and a `devices` file that others can write, so `sleipnir-init` creates the directory `0700` and `permissions-init` strips group and other access from the files in it, like `~/.ssh`.
+
+The image pins the osewa release in `versions`. osewa documents hourly auto-update only for a server started as a service or with `--daemon`, so do not count on the foreground server here updating itself. To upgrade between image builds, run `osewa update <host>` from a client: it writes `~/.local/bin/osewa`, which comes first on `PATH`, and restarts the server under s6. Client and host must share the protocol version, so update the host when a client reports `update osewa on the host or here`.
 
 `scheduler` runs a user-authored crontab with [Supercronic](https://github.com/aptible/supercronic). Supercronic fits the container better than `cron` or a systemd timer: PID 1 is `s6-svscan`, systemd is offline, and Supercronic is one static binary that logs to stdout without needing root or setuid. The service validates the crontab, drops to `ubuntu`, and watches the file for changes, including Kubernetes ConfigMap atomic updates.
 
@@ -154,6 +161,10 @@ Delete the override in `~/.local/bin` to fall back to the image baseline.
 | `DOTFILES_INSTALL_SCRIPT` | `install.sh` | Repository-relative installer executed as `ubuntu`. |
 | `MOSHI_LISTEN` | `0.0.0.0:24544` | Moshi web client. |
 | `MOSHI_ALLOWED_HOSTS` | — | Comma-separated hostnames browsers may use for the Moshi web client, such as an Ingress host. Moshi rejects any other `Host` or `Origin`. The service applies it with `moshi-hook set allowed-hosts` on every start, so it replaces the stored list; `none` clears it. Unset leaves the stored list alone. An invalid value is logged and the stored list stays in effect. |
+| `SLEIPNIR_ENABLE_OSEWA` | `1` | Set to `0` to disable the osewa host server. |
+| `OSEWA_LISTEN` | `:7322` | osewa listen address. TCP (TLS WebSocket) and UDP (QUIC) share the port. |
+| `OSEWA_NAME` | `$TS_HOSTNAME` | Server name that osewa clients see; falls back to `sleipnir`. |
+| `OSEWA_QUIC` | `1` | Set to `0` to pass `--no-quic` when only TCP reaches the pod. Clients still work over TCP, about 300 ms slower per connection. |
 | `SLEIPNIR_ENABLE_CODE_TUNNEL` | `0` | Set to `1` to run the VS Code tunnel. |
 | `CODE_TUNNEL_NAME` | `sleipnir` | Name shown in vscode.dev. The CLI lowercases the name and accepts only letters, digits and `-`, up to 20 characters, so an uppercase value registers lowercased. |
 | `CLAUDE_RC_NAME` | `$TS_HOSTNAME` | Name shown in the Claude app. It is also passed as the session name prefix; without it the prefix falls back to the hostname, which under Kubernetes is the pod name unless the pod sets `hostname`. |
@@ -255,6 +266,8 @@ Each agent keeps its own credentials, so each gets its own volume. On every star
 | `/home/ubuntu/.local/state/herdr-core` | herdr-core socket, terminal records, saved screens, machines; created `0700` because screens may hold secrets |
 | `/home/ubuntu/.config/moshi` | Moshi settings |
 | `/home/ubuntu/.local/state/moshi` | Moshi **pairing secret** — lose it and you pair the phone again |
+| `/home/ubuntu/.config/osewa` | osewa `server.key` and the `devices` allow list; lose it and every client enrolls again |
+| `/home/ubuntu/.local/state/osewa` | osewa state; `--daemon` would log here, but the s6 service logs to the container log |
 | `/home/ubuntu/.local/bin` | CLI updates that outlive a restart |
 | `/home/ubuntu/.vscode-cli` | VS Code tunnel; the server downloads on first start |
 | `/home/ubuntu/.vscode-server` | Remote extensions and their `globalStorage`; without it every restart reinstalls them |
@@ -269,7 +282,8 @@ Nothing is logged in yet, and that is fine: Herdr and Moshi come up on their own
 2. Connect through an enabled access path, such as `ssh ubuntu@<TS_HOSTNAME>` with Tailscale or the Moshi web client on port 24544.
 3. Log into each CLI once. Credentials land on the volumes and stay there.
 4. Pair Moshi: `moshi-hook pair --token <token>`, then `moshi-hook install`.
-5. `code tunnel` prints a device-login URL on its first run; read it with `s6-svc` logs or from the pane.
+5. Enroll an osewa client: on the client run `osewa login --no-install --addr <host>:7322 ubuntu@<TS_HOSTNAME>`. It runs `osewa enroll` over SSH, so it needs Tailscale SSH or another SSH path. `--no-install` keeps login from installing a second copy; the image already has `osewa` on `PATH`.
+6. `code tunnel` prints a device-login URL on its first run; read it with `s6-svc` logs or from the pane.
 
 ## Building
 
