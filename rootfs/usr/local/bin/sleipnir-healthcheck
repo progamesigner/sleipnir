@@ -42,6 +42,10 @@ if [[ ${SLEIPNIR_ENABLE_MOSHI:-1} == 1 ]]; then
     /usr/bin/timeout --kill-after=1s 2s /bin/bash --noprofile --norc -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" || fail 'Moshi listener is unavailable'
 fi
 
+if [[ ${SLEIPNIR_ENABLE_OSEWA:-0} == 1 ]]; then
+    check_service osewa
+fi
+
 if [[ ${SLEIPNIR_ENABLE_TAILSCALE:-0} == 1 ]]; then
     check_service tailscaled
     status=$(/usr/bin/curl -q --silent --show-error --fail --noproxy '*' --max-time 3 --unix-socket /run/tailscale/tailscaled.sock 'http://local-tailscaled.sock/localapi/v0/status?peers=false') || fail 'Tailscale LocalAPI is unavailable'

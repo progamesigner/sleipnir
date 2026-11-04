@@ -1,0 +1,12 @@
+#!/command/with-contenv sh
+
+[ "${SLEIPNIR_ENABLE_OSEWA:-0}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+
+cd /home/ubuntu || exit 1
+
+# The foreground server logs to stdout, so s6 sends it to the container log.
+# `osewa update <host>` writes ~/.local/bin/osewa, which is first on PATH and on a PVC, so the upgrade survives a restart.
+set -- server --listen "${OSEWA_LISTEN:-:7322}" --name "${OSEWA_NAME:-${TS_HOSTNAME:-sleipnir}}"
+[ "${OSEWA_QUIC:-1}" = "1" ] || set -- "$@" --no-quic
+
+exec s6-setuidgid ubuntu osewa "$@"

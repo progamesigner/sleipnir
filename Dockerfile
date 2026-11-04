@@ -54,6 +54,24 @@ RUN curl -fsSL -o /tmp/supercronic https://github.com/aptible/supercronic/releas
  && install -m 0755 /tmp/supercronic /supercronic \
  && rm -f /tmp/supercronic
 
+FROM fetcher AS osewa
+
+ARG TARGETARCH
+
+ARG OSEWA_VERSION=none
+
+RUN case "${TARGETARCH}" in \
+        amd64|arm64) ;; \
+        *) echo "unsupported architecture: ${TARGETARCH}" >&2 ; exit 1 ;; \
+    esac \
+ && cd /tmp \
+ && curl -fsSL -o SHA256SUMS https://github.com/rjyo/osewa/releases/download/v${OSEWA_VERSION}/SHA256SUMS \
+ && curl -fsSL -o osewa-linux-${TARGETARCH}.gz https://github.com/rjyo/osewa/releases/download/v${OSEWA_VERSION}/osewa-linux-${TARGETARCH}.gz \
+ && grep "  osewa-linux-${TARGETARCH}.gz\$" SHA256SUMS | sha256sum --check --strict - \
+ && gzip -dc osewa-linux-${TARGETARCH}.gz > osewa \
+ && install -D -m 0755 osewa /usr/local/bin/osewa \
+ && rm -f SHA256SUMS osewa-linux-${TARGETARCH}.gz osewa
+
 FROM fetcher AS tailscale
 
 ARG TARGETARCH
@@ -362,6 +380,7 @@ COPY --from=k9s /usr/local/bin/k9s /usr/local/bin/k9s
 COPY --from=herdr /usr/local/bin/herdr /usr/local/bin/herdr
 COPY --from=herdr-core /usr/local/bin/herdr-core /usr/local/bin/herdr-core
 COPY --from=moshi /usr/local/bin/moshi-hook /usr/local/bin/moshi-hook
+COPY --from=osewa /usr/local/bin/osewa /usr/local/bin/osewa
 COPY --from=supercronic /supercronic /usr/local/bin/supercronic
 COPY --from=uv /uv /uvx /usr/local/bin/
 COPY --from=lang-bun /usr/local/bin/bun /usr/local/bin/bun
@@ -383,13 +402,13 @@ RUN set -eu ; \
         chown -R ubuntu:ubuntu /usr/local/share/${directory} ; \
     done \
  && ln -s herdr-core /usr/local/bin/hc \
- && for binary in code herdr herdr-core moshi-hook tailscale tailscaled uv uvx ; do \
+ && for binary in code herdr herdr-core moshi-hook osewa tailscale tailscaled uv uvx ; do \
         if [ -e /usr/local/bin/${binary} ] ; then chown ubuntu:ubuntu /usr/local/bin/${binary} ; fi ; \
     done \
  && install -d -o ubuntu -g ubuntu -m 0755 /usr/local/npm /usr/local/npm/bin /usr/local/npm/lib /usr/local/uv /usr/local/uv/bin /usr/local/uv/tools ; \
     export PATH=/usr/local/go/bin:/opt/go/bin:/usr/local/bin:/usr/local/npm/bin:/usr/local/uv/bin:/usr/local/share/antigravity-cli/bin:/usr/local/share/claude-code/bin:/usr/local/share/codex/bin:/usr/local/share/copilot-cli/bin:/usr/local/share/opencode/bin:${PATH} ; \
     missing="" ; \
-    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go hc herdr herdr-core k9s kubectl make moshi-hook node npm opencode php python3 rustc sudo tailscale tailscaled uv uvx ; do \
+    for binary in agy bun cc claude code codex composer copilot cargo deno docker gh go hc herdr herdr-core k9s kubectl make moshi-hook node npm opencode osewa php python3 rustc sudo tailscale tailscaled uv uvx ; do \
         command -v "${binary}" > /dev/null 2>&1 || missing="${missing} ${binary}" ; \
     done ; \
     if [ -n "${missing}" ] ; then echo "missing binaries:${missing}" >&2 ; exit 1 ; fi ; \
@@ -450,6 +469,7 @@ ENV SLEIPNIR_ENABLE_HERDR=1
 ENV SLEIPNIR_ENABLE_HERDR_CORE=1
 ENV SLEIPNIR_ENABLE_AGENT_RESUME=0
 ENV SLEIPNIR_ENABLE_MOSHI=1
+ENV SLEIPNIR_ENABLE_OSEWA=0
 ENV SLEIPNIR_ENABLE_RC_AGY=0
 ENV SLEIPNIR_ENABLE_RC_CLAUDE=0
 ENV SLEIPNIR_ENABLE_RC_CODEX=0
@@ -462,5 +482,6 @@ ENV SLEIPNIR_SCHEDULER_WORKDIR=/home/ubuntu
 ENV SLEIPNIR_TAILSCALE_TUN=tailscale0
 
 EXPOSE 24544
+EXPOSE 7322/tcp 7322/udp
 
 ENTRYPOINT ["/init"]

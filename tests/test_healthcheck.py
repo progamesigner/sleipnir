@@ -29,6 +29,7 @@ class HealthcheckTests(unittest.TestCase):
             "SLEIPNIR_ENABLE_HERDR": "0",
             "SLEIPNIR_ENABLE_HERDR_CORE": "0",
             "SLEIPNIR_ENABLE_MOSHI": "0",
+            "SLEIPNIR_ENABLE_OSEWA": "0",
             "SLEIPNIR_ENABLE_TAILSCALE": "1",
         }
 
@@ -99,6 +100,14 @@ class HealthcheckTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 1)
         self.assertIn("herdr-core is down", result.stderr)
+
+    def test_osewa_service(self):
+        self.env.update(SLEIPNIR_ENABLE_TAILSCALE="0", SLEIPNIR_ENABLE_OSEWA="1")
+        self.assertEqual(self.run_check().returncode, 0)
+        self.env["TEST_SERVICE_UP"] = "false"
+        result = self.run_check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("osewa is down", result.stderr)
 
     def test_moshi_loopback_and_closed_port(self):
         self.env.update(SLEIPNIR_ENABLE_TAILSCALE="0", SLEIPNIR_ENABLE_MOSHI="1")
