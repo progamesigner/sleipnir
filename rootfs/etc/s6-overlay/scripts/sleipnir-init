@@ -59,3 +59,12 @@ done
 [ -e /home/ubuntu/.claude/.claude.json ] || install -o ubuntu -g ubuntu -m 0644 /dev/null /home/ubuntu/.claude/.claude.json
 ln -sf /home/ubuntu/.claude/.claude.json /home/ubuntu/.claude.json
 chown -h ubuntu:ubuntu /home/ubuntu/.claude.json
+
+# herdr-core forgets its terminals when the machine ID changes, and each image build makes a new one.
+machine_id=/home/ubuntu/.local/state/sleipnir/machine-id
+if ! grep -Eqx '[0-9a-f]{32}' "${machine_id}" 2>/dev/null; then
+    tr -d '-' < /proc/sys/kernel/random/uuid > "${machine_id}"
+    chown ubuntu:ubuntu "${machine_id}"
+fi
+cat "${machine_id}" > /etc/machine-id
+[ -d /var/lib/dbus ] && cat "${machine_id}" > /var/lib/dbus/machine-id

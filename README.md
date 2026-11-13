@@ -42,7 +42,7 @@ The `herdr-core` service runs `herdr-core serve` in the foreground under s6. Wit
 
 Set `SLEIPNIR_ENABLE_HERMOD=1` to enable `sleipnir-hermod`, the s6 service that records and restores agent conversations. Its SQLite database stores workspaces, tabs and panes independently of Core state. Hooks enqueue session events; Hermod alone updates the database, recreates missing terminals and resumes agents in their exact working folders. Claude Code and Codex use SessionStart confirmation, with up to 4 recoveries at once (`SLEIPNIR_RECOVERY_CONCURRENCY`). Codex resumes with `--no-daemon`. Copilot, Antigravity and OpenCode hooks are installed when their CLIs are present; the latter two use process and screen checks when resume emits no hook.
 
-`~/.local/state/sleipnir` **must be on a persistent volume**. The manifests do not mount it yet. Agent conversation files and project folders must also survive restarts. Keep one Hermod writer per state directory. Hermod uses an exclusive lock and SQLite rollback journaling for network filesystems. On its first start it imports live terminals carrying the old `agent-resume` label, keeps the newest duplicate session and clears imported labels after committing.
+`~/.local/state/sleipnir` **must be on a persistent volume**. It also keeps the machine ID that `sleipnir-init` writes to `/etc/machine-id` at every start, because herdr-core forgets its terminals when that ID changes and each image build makes a new one. Agent conversation files and project folders must also survive restarts. Keep one Hermod writer per state directory. Hermod uses an exclusive lock and SQLite rollback journaling for network filesystems. On its first start it imports live terminals carrying the old `agent-resume` label, keeps the newest duplicate session and clears imported labels after committing.
 
 Hooks are appended after existing hooks. Installation removes obsolete Sleipnir hooks and leaves unrelated hooks in order. Codex may require review of new hooks; Hermod does not change hook trust. Hook commands call `sleipnir-hermod hook <agent> <event>` directly. No zsh hook is installed. Disabling `SLEIPNIR_ENABLE_HERMOD` stops capture and recovery without deleting the database.
 
@@ -266,7 +266,7 @@ Each agent keeps its own credentials, so each gets its own volume. On every star
 | `/home/ubuntu/.local/share/opencode` | OpenCode **data** — a separate directory from the config |
 | `/home/ubuntu/.config/herdr` | herdr socket, config, logs |
 | `/home/ubuntu/.config/herdr-core` | herdr-core `config.toml` and templates |
-| `/home/ubuntu/.local/state/sleipnir` | Hermod database, lock and hook inbox; requires a persistent volume |
+| `/home/ubuntu/.local/state/sleipnir` | Hermod database, lock, hook inbox and the machine ID; requires a persistent volume |
 | `/home/ubuntu/.local/state/herdr-core` | herdr-core socket, terminal records, saved screens, machines; created `0700` because screens may hold secrets |
 | `/home/ubuntu/.config/moshi` | Moshi settings |
 | `/home/ubuntu/.local/state/moshi` | Moshi **pairing secret** — lose it and you pair the phone again |
