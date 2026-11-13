@@ -388,5 +388,58 @@ class HermodTest(unittest.TestCase):
                           for group in hooks[name] for hook in group['hooks']], [3, 3])
 
 
+    def launcher_tree(self, child_args):
+        launcher = {'name': 'python3', 'pid': 100,
+                    'argv': ['python3', '/usr/local/bin/sleipnir-hermod', 'launch', 'pane']}
+        children = {'100': ['200'] if child_args else []}
+        args = {'200': child_args}
+        return launcher, (patch.object(h, 'proc_children', side_effect=lambda pid: children.get(str(pid), [])),
+                          patch.object(h, 'proc_args', side_effect=lambda pid: args.get(str(pid), [])))
+
+    def test_launcher_with_agent_child_counts_as_running(self):
+        launcher, (children, args) = self.launcher_tree(['claude', '--resume', 'session-123'])
+        with children, args:
+            self.assertEqual(h.foreground({'foreground': launcher}), 'running')
+        launcher, (children, args) = self.launcher_tree([])
+        with children, args:
+            self.assertEqual(h.foreground({'foreground': launcher}), 'starting')
+
+    def test_running_agent_under_launcher_is_not_retried(self):
+        pane = self.start()
+        with self.db:
+            h.record(self.db, 'launch', pane['id'])
+        self.r.apply_inbox(dict(self.event, at=h.now() + 100), 'ack.json')
+        launcher, (children, args) = self.launcher_tree(['claude', '--resume', 'session-123'])
+        self.term['foreground'] = launcher
+        calls = []
+        self.r.core = lambda *a, **k: calls.append(a) or ''
+        with children, args, patch.object(h, 'session_held', return_value=True):
+            for _ in range(3):
+                self.r.phase2()
+                for attempt in self.r.attempts.values():
+                    attempt['deadline'] = 0
+        self.assertNotIn(pane['id'], self.r.attempts)
+        self.assertEqual(self.r.runtime[pane['id']], 'running')
+        self.assertEqual(calls, [])
+        failed = self.db.execute("SELECT count(*) FROM event WHERE kind='failed'").fetchone()[0]
+        self.assertEqual(failed, 0)
+
+    def test_stale_claude_registry_with_reused_pid_is_not_held(self):
+        sessions = self.path / 'home/.claude/sessions'
+        sessions.mkdir(parents=True)
+        (sessions / '321.json').write_text(json.dumps({'pid': 321, 'sessionId': 'session-123',
+                                                       'procStart': '5000'}))
+        with patch.object(h.Path, 'home', return_value=self.path / 'home'):
+            with patch.object(h, 'proc_args', return_value=['zsh']), \
+                    patch.object(h, 'proc_start', return_value='5000'):
+                self.assertFalse(h.session_held('claude', 'session-123'))
+            with patch.object(h, 'proc_args', return_value=['claude', '--resume']), \
+                    patch.object(h, 'proc_start', return_value='9999'):
+                self.assertFalse(h.session_held('claude', 'session-123'))
+            with patch.object(h, 'proc_args', return_value=['claude', '--resume']), \
+                    patch.object(h, 'proc_start', return_value='5000'):
+                self.assertTrue(h.session_held('claude', 'session-123'))
+
+
 if __name__ == '__main__':
     unittest.main()

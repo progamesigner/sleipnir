@@ -261,7 +261,7 @@ def foreground(term):
     names = {Path(str(x)).name for x in argv[:3]}
     names.add(fg.get('name', ''))
     if 'sleipnir-hermod' in names and 'launch' in argv:
-        return 'starting'
+        return launched_program(fg.get('pid'))
     if names & AGENTS:
         return 'running'
     if names & SHELLS:
@@ -325,6 +325,20 @@ def agent_argv(agent):
     return []
 
 
+def proc_children(pid):
+    try:
+        return Path(f'/proc/{pid}/task/{pid}/children').read_text().split()
+    except OSError:
+        return []
+
+
+def launched_program(pid, depth=0):
+    # The launcher stays in the foreground for the agent's whole life, with the agent as its child.
+    if any(child_program(child, depth + 1) == 'running' for child in proc_children(pid)):
+        return 'running'
+    return 'starting'
+
+
 def child_program(pid, depth=0):
     if not pid or depth > 4:
         return None
@@ -335,18 +349,21 @@ def child_program(pid, depth=0):
     except OSError:
         pass
     if 'sleipnir-hermod' in names and 'launch' in args:
-        return 'starting'
+        return launched_program(pid, depth)
     if names & AGENTS:
         return 'running'
-    try:
-        children = Path(f'/proc/{pid}/task/{pid}/children').read_text().split()
-    except OSError:
-        return None
-    for child in children:
+    for child in proc_children(pid):
         result = child_program(child, depth + 1)
         if result:
             return result
     return None
+
+
+def proc_start(pid):
+    try:
+        return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
 
 
 def session_held(agent, session):
@@ -357,7 +374,10 @@ def session_held(agent, session):
             try:
                 data = json.loads(path.read_text())
                 pid = int(data.get('pid', path.stem))
-                if data.get('sessionId', data.get('session_id')) == session and proc_args(pid):
+                # Registry files outlive restarts and their PIDs get reused, so check the start time.
+                if (data.get('sessionId', data.get('session_id')) == session
+                        and any(Path(x).name == 'claude' for x in proc_args(pid)[:3])
+                        and str(data.get('procStart', '')) in ('', proc_start(pid))):
                     return True
             except (OSError, ValueError, TypeError):
                 pass
