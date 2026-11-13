@@ -379,23 +379,39 @@ def hc(*args, plain=False):
     return result.stdout
 
 
-def snapshot():
-    result = json.loads(hc('ls', '--all', '--json'))
-    return result if isinstance(result, list) else result.get('terminals', [])
-
-
-def read_app_tabs():
+def core_rpc(method, params, timeout=5):
     session = os.environ.get('HC_SESSION', 'default')
     state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state')))
     path = os.environ.get('HC_SOCKET', str(state / 'herdr-core' / session / (session + '.sock')))
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(timeout)
+        client.connect(path)
+        request = {'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}
+        client.sendall(json.dumps(request).encode() + b'\n')
+        with client.makefile('rb') as stream:
+            return json.loads(stream.readline(64 * 1024 * 1024))
+
+
+def snapshot():
+    # `hc ls --json` is a summary without created_ms, labels, reason or foreground.
+    response = core_rpc('terminal.list', {'all': True}, timeout=15)
+    if 'result' not in response:
+        raise RuntimeError(f"terminal.list failed: {response.get('error')}")
+    result = response['result']
+    return result if isinstance(result, list) else result.get('terminals', [])
+
+
+def terminal_record(address):
+    response = core_rpc('terminal.get', {'terminal': address}, timeout=15)
+    if 'result' not in response:
+        raise RuntimeError(f"terminal.get failed: {response.get('error')}")
+    result = response['result']
+    return result.get('terminal', result) if isinstance(result, dict) else result
+
+
+def read_app_tabs():
     try:
-        with socket.socket(socket.AF_UNIX) as client:
-            client.settimeout(2)
-            client.connect(path)
-            request = {'jsonrpc': '2.0', 'id': 1, 'method': 'doc.get', 'params': {'name': 'herdr-app'}}
-            client.sendall(json.dumps(request).encode() + b'\n')
-            with client.makefile('rb') as stream:
-                response = json.loads(stream.readline(16 * 1024 * 1024))
+        response = core_rpc('doc.get', {'name': 'herdr-app'}, timeout=2)
         if 'result' not in response:
             return None
         value = response['result'].get('value')
@@ -410,6 +426,8 @@ def placement(db, term, cwd):
     labels = term.get('labels') or {}
     root, subpath = cwd_parts(cwd)
     space_name, tab_name = parse_where(labels.get('where'))
+    if not labels.get('herdr.space'):
+        space_name = labels.get('shepherd.space-name') or space_name
     space_id, tab_id = labels.get('herdr.space'), labels.get('herdr.tab')
     workspace = None
     if space_id:
@@ -428,6 +446,11 @@ def placement(db, term, cwd):
         if space_id and workspace['herdr_space_id'] != space_id:
             db.execute('UPDATE workspace SET herdr_space_id=?,updated_at=? WHERE id=?',
                        (space_id, now(), workspace_id))
+        # The name is read once, when the workspace first meets its App space.
+        first_sight = space_id and not workspace['herdr_space_id']
+        if first_sight and space_name and workspace['name'] != space_name and not db.execute(
+                'SELECT 1 FROM workspace WHERE name=? AND id<>?', (space_name, workspace_id)).fetchone():
+            db.execute('UPDATE workspace SET name=?,updated_at=? WHERE id=?', (space_name, now(), workspace_id))
         root = workspace['path']
         subpath = os.path.relpath(cwd, root) if Path(cwd).is_relative_to(root) else cwd
         if subpath == '.':
@@ -600,9 +623,19 @@ class Reconciler:
     def pane_for(self, term):
         if not term:
             return None
-        return self.db.execute('SELECT * FROM pane WHERE herdr_terminal_id=? '
+        pane = self.db.execute('SELECT * FROM pane WHERE herdr_terminal_id=? '
                                "AND herdr_terminal_created_ms=? AND state<>'closed'",
                                incarnation(term)).fetchone()
+        address, created = incarnation(term)
+        if pane is None and created is not None:
+            # Panes recorded before snapshots carried created_ms; adopt them by address.
+            with self.db:
+                self.db.execute('UPDATE pane SET herdr_terminal_created_ms=? WHERE herdr_terminal_id=? '
+                                "AND herdr_terminal_created_ms IS NULL AND state<>'closed'", (created, address))
+            pane = self.db.execute('SELECT * FROM pane WHERE herdr_terminal_id=? '
+                                   "AND herdr_terminal_created_ms=? AND state<>'closed'",
+                                   (address, created)).fetchone()
+        return pane
 
     def transition(self, pane, action, payload):
         pane_id = pane['id']
@@ -764,7 +797,9 @@ class Reconciler:
             args = ['run', '--bg', '--keep', '--outlive-parent', '--cwd', plan['cwd']]
             for key, val in plan['labels'].items():
                 args.extend(['--label', key + '=' + val])
-            term = json.loads(self.core(*args, '--json', plain=True))
+            created = json.loads(self.core(*args, '--json', plain=True))
+            # `hc run --json` omits created_ms, which identifies the terminal.
+            term = terminal_record(created['address'])
             with self.db:
                 if plan['split']:
                     tab_id = ident()
@@ -979,15 +1014,20 @@ def install_hooks(path, agent, events, grouped=True):
     for name, event in events:
         entries = hooks.setdefault(name, [])
         command = hook_command(agent, event)
+        # Codex clamps SessionEnd hooks to 3 seconds; the hook only writes one inbox file.
         if grouped:
-            if any(h.get('command') == command for group in entries if isinstance(group, dict)
-                   for h in group.get('hooks', []) if isinstance(h, dict)):
-                continue
-            entries.append({'hooks': [{'type': 'command', 'command': command, 'timeout': 10}]})
+            found = [h for group in entries if isinstance(group, dict)
+                     for h in group.get('hooks', []) if isinstance(h, dict) and h.get('command') == command]
+            for h in found:
+                h['timeout'] = 3
+            if not found:
+                entries.append({'hooks': [{'type': 'command', 'command': command, 'timeout': 3}]})
         else:
-            if any(isinstance(h, dict) and h.get('bash') == command for h in entries):
-                continue
-            entries.append({'type': 'command', 'bash': command, 'timeoutSec': 10})
+            found = [h for h in entries if isinstance(h, dict) and h.get('bash') == command]
+            for h in found:
+                h['timeoutSec'] = 3
+            if not found:
+                entries.append({'type': 'command', 'bash': command, 'timeoutSec': 3})
             config.setdefault('version', 1)
     atomic_json(path, config)
 

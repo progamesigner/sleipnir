@@ -328,5 +328,65 @@ class HermodTest(unittest.TestCase):
         self.assertNotIn(pane['id'], self.r.attempts)
 
 
+    def test_snapshot_reads_full_terminal_records(self):
+        with patch.object(h, 'core_rpc', return_value={'result': {'terminals': [self.term]}}) as rpc:
+            self.assertEqual(h.snapshot(), [self.term])
+        rpc.assert_called_once_with('terminal.list', {'all': True}, timeout=15)
+
+    def test_recreated_terminal_gets_created_ms_and_is_not_recreated(self):
+        self.start()
+        self.r.terminals = []
+        self.r.app_tabs = set()
+        self.r.core = lambda *args, **kwargs: json.dumps({'address': 't9', 'state': 'live'})
+        full = dict(self.term, address='t9', created_ms=999,
+                    labels={'herdr.space': 's1', 'herdr.tab': 'tab9', 'where': 'Project / Work'})
+        with patch.object(h, 'terminal_record', return_value=full):
+            self.r.phase1()
+        pane = h.panes(self.db)[0]
+        self.assertEqual((pane['herdr_terminal_id'], pane['herdr_terminal_created_ms']), ('t9', 999))
+        calls = []
+        self.r.core = lambda *args, **kwargs: calls.append(args)
+        self.r.phase1()
+        self.assertEqual(calls, [])
+
+    def test_pane_without_created_ms_is_adopted_and_closes(self):
+        self.start()
+        self.db.execute('UPDATE pane SET herdr_terminal_created_ms=NULL')
+        self.db.commit()
+        self.r.refresh([self.term])
+        self.assertEqual(h.panes(self.db)[0]['herdr_terminal_created_ms'], 123)
+        self.db.execute('UPDATE pane SET herdr_terminal_created_ms=NULL')
+        self.db.commit()
+        closed = dict(self.term, state='finished', reason='killed')
+        self.r.refresh([closed])
+        self.assertEqual(h.panes(self.db)[0]['state'], 'closed')
+        calls = []
+        self.r.core = lambda *args, **kwargs: calls.append(args)
+        self.r.phase1()
+        self.assertEqual(calls, [])
+
+    def test_workspace_name_comes_from_the_first_app_space(self):
+        self.term = dict(self.term, labels={'shepherd.space-name': 'Requested'})
+        self.r.terminals = [self.term]
+        self.start()
+        self.assertEqual(h.panes(self.db)[0]['workspace_name'], 'Requested')
+        placed = dict(self.term, labels={'herdr.space': 's1', 'herdr.tab': 'tab1', 'where': 'App Space / Work'})
+        self.r.refresh([placed])
+        self.assertEqual(h.panes(self.db)[0]['workspace_name'], 'App Space')
+        later = dict(self.term, labels={'herdr.space': 's1', 'herdr.tab': 'tab2', 'where': 'Later / Work'})
+        self.r.refresh([later])
+        self.assertEqual(h.panes(self.db)[0]['workspace_name'], 'App Space')
+
+    def test_install_sets_three_second_hook_timeouts(self):
+        path = self.path / 'hooks.json'
+        path.write_text(json.dumps({'hooks': {'SessionEnd': [{'hooks': [
+            {'type': 'command', 'command': 'sleipnir-hermod hook codex end', 'timeout': 10}]}]}}))
+        h.install_hooks(path, 'codex', [('SessionStart', 'start'), ('SessionEnd', 'end')])
+        hooks = json.loads(path.read_text())['hooks']
+        self.assertEqual(len(hooks['SessionEnd']), 1)
+        self.assertEqual([hook['timeout'] for name in ('SessionStart', 'SessionEnd')
+                          for group in hooks[name] for hook in group['hooks']], [3, 3])
+
+
 if __name__ == '__main__':
     unittest.main()
