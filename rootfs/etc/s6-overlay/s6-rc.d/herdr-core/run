@@ -1,19 +1,9 @@
 #!/command/with-contenv sh
-
-[ "${SLEIPNIR_ENABLE_HERDR_CORE:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
-
-cd /home/ubuntu || exit 1
-
-# Wait out a core started elsewhere (e.g. `hc update`); serve would just exit and s6 would loop
-lock="${XDG_STATE_HOME:-/home/ubuntu/.local/state}/herdr-core/${HC_SESSION:-default}/core.lock"
-while [ -e "${lock}" ] && ! s6-setuidgid ubuntu flock --nonblock "${lock}" true ; do
-    sleep 10
-done
-
-# Hooks are installed after dotfiles and before any recovered shell starts.
-if [ "${SLEIPNIR_ENABLE_AGENT_RESUME:-0}" = "1" ]; then
-    s6-setuidgid ubuntu python3 /usr/local/lib/sleipnir-agent-resume/setup.py || \
-        echo "sleipnir: agent resume hook setup failed; starting core without new hooks" >&2
+if [ "${SLEIPNIR_ENABLE_HERMOD:-0}" = "1" ]; then
+    s6-setuidgid ubuntu /usr/local/bin/sleipnir-hermod install || \
+        echo "sleipnir: Hermod hook installation failed" >&2
 fi
-
-exec s6-setuidgid ubuntu herdr-core serve
+[ "${SLEIPNIR_ENABLE_HERDR_CORE:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+cd /home/ubuntu || exit 1
+exec s6-setuidgid ubuntu s6-notifyoncheck -d -n 0 -w 1000 -c /etc/s6-overlay/s6-rc.d/herdr-core/data/check \
+    python3 /etc/s6-overlay/s6-rc.d/herdr-core/data/monitor

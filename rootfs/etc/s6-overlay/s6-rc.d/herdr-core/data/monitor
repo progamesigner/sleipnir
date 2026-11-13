@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+import fcntl
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+session = os.environ.get('HC_SESSION', 'default')
+state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state')))
+directory = state / 'herdr-core' / session
+directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+lock_path = directory / 'core.lock'
+failures = 0
+threshold = max(2, int(os.environ.get('SLEIPNIR_CORE_FAILURE_THRESHOLD', '3')))
+backoff = 5
+child = None
+stopping = False
+
+
+def stop(signum, frame):
+    global stopping
+    stopping = True
+    if child and child.poll() is None:
+        child.send_signal(signum)
+
+
+def lock_owner():
+    stat = lock_path.stat()
+    key = f'{os.major(stat.st_dev):02x}:{os.minor(stat.st_dev):02x}:{stat.st_ino}'
+    for line in Path('/proc/locks').read_text().splitlines():
+        fields = line.split()
+        if len(fields) > 5 and fields[5] == key and fields[1] == 'FLOCK':
+            return int(fields[4])
+    return None
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+while not stopping:
+    try:
+        if child and child.poll() is not None:
+            child = None
+            time.sleep(5)
+        with lock_path.open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                if child is None:
+                    child = subprocess.Popen(['/usr/local/bin/herdr-core', 'serve'])
+                time.sleep(5)
+                continue
+        check = Path(__file__).with_name('check')
+        result = subprocess.run([sys.executable, str(check)], timeout=4)
+        if result.returncode == 0:
+            failures = 0
+            backoff = 5
+        else:
+            failures += 1
+        if failures >= threshold:
+            pid = lock_owner()
+            if pid:
+                argv = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+                if argv and Path(os.fsdecode(argv[0])).name == 'herdr-core' and b'serve' in argv:
+                    os.kill(pid, signal.SIGTERM)
+            failures = 0
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f'herdr-core monitor: {error}', flush=True)
+    time.sleep(5)
+if child and child.poll() is None:
+    try:
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()

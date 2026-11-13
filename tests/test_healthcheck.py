@@ -101,6 +101,13 @@ class HealthcheckTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("herdr-core is down", result.stderr)
 
+    def test_hermod_down_keeps_container_alive(self):
+        self.env['SLEIPNIR_ENABLE_TAILSCALE'] = '0'
+        self.env['SLEIPNIR_ENABLE_HERDR_CORE'] = '1'
+        self.env['SLEIPNIR_ENABLE_HERMOD'] = '1'
+        self.supervisor.write_text('#!/bin/sh\ncase "$*" in *sleipnir-hermod*) echo false;; *) echo true;; esac\n')
+        self.assertEqual(self.run_check().returncode, 0)
+
     def test_osewa_service(self):
         self.env["SLEIPNIR_ENABLE_TAILSCALE"] = "0"
         self.env.pop("SLEIPNIR_ENABLE_OSEWA")

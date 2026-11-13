@@ -425,9 +425,6 @@ RUN set -eu ; \
 
 COPY rootfs/ /
 
-RUN ln -s /usr/local/lib/sleipnir-agent-resume/agent_resume.py /usr/local/bin/sleipnir-agent-resume \
- && printf '\nsource /etc/sleipnir/agent-resume.zsh\n' >> /etc/zsh/zshrc
-
 ENV HOME=/home/ubuntu
 ENV LANG=C.utf8
 ENV LC_ALL=C.utf8
@@ -467,7 +464,7 @@ ENV SLEIPNIR_ENABLE_CODE_TUNNEL=0
 ENV SLEIPNIR_ENABLE_DOTFILES=0
 ENV SLEIPNIR_ENABLE_HERDR=1
 ENV SLEIPNIR_ENABLE_HERDR_CORE=1
-ENV SLEIPNIR_ENABLE_AGENT_RESUME=0
+ENV SLEIPNIR_ENABLE_HERMOD=0
 ENV SLEIPNIR_ENABLE_MOSHI=1
 ENV SLEIPNIR_ENABLE_OSEWA=1
 ENV SLEIPNIR_ENABLE_RC_AGY=0

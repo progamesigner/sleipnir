@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import socket
+import sys
+
+session = os.environ.get('HC_SESSION', 'default')
+state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state')))
+path = os.environ.get('HC_SOCKET', str(state / 'herdr-core' / session / (session + '.sock')))
+try:
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(2)
+        client.connect(path)
+        client.sendall(b'{"jsonrpc":"2.0","id":1,"method":"server.status","params":{}}\n')
+        with client.makefile('rb') as stream:
+            response = json.loads(stream.readline(65536))
+        if response.get('id') != 1 or 'result' not in response:
+            sys.exit(1)
+except (OSError, ValueError):
+    sys.exit(1)

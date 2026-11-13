@@ -1,0 +1,1106 @@
+#!/usr/bin/env python3
+"""Persistent agent session recovery. Hooks only enqueue; serve owns all DB writes.
+
+Launch flag filtering adapted from herdr-agent-resume revision
+64eed1df775c512c680e45bc05953b1b52f1aafc.
+
+MIT License
+
+Copyright (c) 2026 Herdr Agent Resume contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+import argparse
+import contextlib
+import fcntl
+import json
+import os
+from pathlib import Path
+import queue
+import re
+import shutil
+import signal
+import socket
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+
+KEEP_FLAGS = {
+    'claude': {
+        "--dangerously-skip-permissions": 0, "--allow-dangerously-skip-permissions": 0,
+        "--ide": 0, "--verbose": 0, "--strict-mcp-config": 0, "--chrome": 0, "--no-chrome": 0,
+        "--brief": 0, "--disable-slash-commands": 0,
+        "--model": 1, "--fallback-model": 1, "--permission-mode": 1, "--agent": 1, "--agents": 1,
+        "--settings": 1, "--setting-sources": 1, "--append-system-prompt": 1, "--system-prompt": 1,
+        "--effort": 1, "--autocompact": 1, "--plugin-dir": 1,
+        "--add-dir": "+", "--allowedTools": "+", "--allowed-tools": "+", "--disallowedTools": "+",
+        "--disallowed-tools": "+", "--mcp-config": "+", "--tools": "+", "--betas": "+",
+    },
+    'codex': {
+        "--oss": 0, "--search": 0, "--dangerously-bypass-approvals-and-sandbox": 0,
+        "--no-alt-screen": 0, "--approve-for-me": 0, "--no-daemon": 0,
+        "-c": 1, "--config": 1, "-m": 1, "--model": 1, "-p": 1, "--profile": 1, "-s": 1, "--sandbox": 1,
+        "-a": 1, "--ask-for-approval": 1, "--add-dir": 1, "--enable": 1, "--disable": 1,
+        "--local-provider": 1,
+    },
+    'agy': {
+        "--dangerously-skip-permissions": 0, "--disable-slash-commands": 0, "--sandbox": 0,
+        "--remote-control": 0,
+        "--add-dir": "+",
+        "--agent": 1, "--effort": 1, "--log-file": 1, "--mode": 1, "--model": 1,
+        "--project": 1, "--settings": 1,
+    },
+}
+MAX_ARGS = 64
+MAX_ARG_LEN = 1024
+
+def launch_flags(agent, args):
+    """The launch flags in `args` (an argv without argv[0]) worth keeping on resume, as
+    groups: [flag, value, ...]. Everything else (session pickers, prompts, unknown
+    flags and their values) is left out."""
+    keep = KEEP_FLAGS[agent]
+    groups, i = [], 0
+    args = [a for a in (args or []) if isinstance(a, str)]
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg == "--":
+            break
+        name, eq, inline = arg.partition("=")
+        arity = keep.get(name) if name.startswith("-") else None
+        if arity is None:
+            continue
+        if eq:
+            if arity != 0:
+                groups.append([arg])
+            continue
+        if arity == 0:
+            groups.append([arg])
+            continue
+        count = 1 if arity == 1 else len(args)
+        values = []
+        while i < len(args) and len(values) < count and not args[i].startswith("-"):
+            values.append(args[i])
+            i += 1
+        if values:
+            groups.append([arg, *values])
+    kept, size = [], 0
+    for group in groups:
+        if size + len(group) > MAX_ARGS or any(len(a) > MAX_ARG_LEN for a in group):
+            continue
+        kept.append(group)
+        size += len(group)
+    return kept
+
+
+def flat(groups):
+    return [a for group in groups for a in group]
+
+
+KEEP_FLAGS.update(copilot={'--model': 1, '--allow-all-tools': 0},
+                  opencode={'--model': 1, '-m': 1, '--agent': 1})
+AGENTS = {'claude', 'codex', 'copilot', 'agy', 'opencode'}
+SHELLS = {'sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'nu'}
+SESSION_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$')
+SCHEMA = '''
+CREATE TABLE workspace (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, path TEXT NOT NULL UNIQUE,
+ herdr_space_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE tab (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspace(id), name TEXT,
+ herdr_tab_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE pane (
+ id TEXT PRIMARY KEY, tab_id TEXT NOT NULL REFERENCES tab(id), name TEXT,
+ agent TEXT NOT NULL CHECK(agent IN ('claude','codex','copilot','agy','opencode')),
+ session_id TEXT, subpath TEXT NOT NULL DEFAULT '', launch_args TEXT,
+ state TEXT NOT NULL CHECK(state IN ('open','closed','blocked')),
+ herdr_terminal_id TEXT, herdr_terminal_created_ms INTEGER,
+ herdr_pinned INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX pane_terminal ON pane(herdr_terminal_id,herdr_terminal_created_ms)
+ WHERE state <> 'closed';
+CREATE UNIQUE INDEX pane_open_session ON pane(agent,session_id)
+ WHERE state <> 'closed' AND session_id IS NOT NULL;
+CREATE TABLE event (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT UNIQUE, at INTEGER NOT NULL,
+ kind TEXT NOT NULL, pane_id TEXT REFERENCES pane(id), payload TEXT);
+PRAGMA user_version = 1;
+'''
+
+
+def now():
+    return int(time.time() * 1000)
+
+
+def ident():
+    return uuid.uuid4().hex
+
+
+def state_dir():
+    return Path.home() / '.local/state/sleipnir'
+
+
+def atomic_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(prefix='.tmp-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(value, stream, ensure_ascii=False)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+
+
+def enqueue(value, directory=None):
+    directory = directory or state_dir()
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    atomic_json(directory / 'inbox' / f'{now()}-{ident()}.json', value)
+
+
+def connect_db(directory, readonly=False):
+    path = directory / 'hermod.db'
+    if readonly:
+        db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=5)
+    else:
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        db = sqlite3.connect(path, timeout=5)
+        db.execute('PRAGMA synchronous=FULL')
+        db.execute('PRAGMA foreign_keys=ON')
+        if db.execute('PRAGMA user_version').fetchone()[0] == 0:
+            db.execute('PRAGMA journal_mode=DELETE')
+            db.executescript(SCHEMA)
+        elif db.execute('PRAGMA user_version').fetchone()[0] != 1:
+            raise ValueError('unsupported Hermod database version')
+    db.row_factory = sqlite3.Row
+    db.execute('PRAGMA busy_timeout=5000')
+    return db
+
+
+def record(db, kind, pane=None, payload=None, source=None, at=None):
+    db.execute('INSERT INTO event(source_id,at,kind,pane_id,payload) VALUES(?,?,?,?,?)',
+               (source, at or now(), kind, pane, json.dumps(payload or {})))
+
+
+def parse_where(value):
+    space, separator, tab = (value or '').partition(' / ')
+    return space or None, (tab if separator and tab and not tab.isdigit() else None)
+
+
+def cwd_parts(cwd):
+    cwd = Path(cwd).absolute()
+    for parent in (cwd, *cwd.parents):
+        marker = parent / '.git'
+        if marker.is_dir():
+            root = parent
+            break
+        if marker.is_file():
+            root = parent
+            try:
+                text = marker.read_text().strip()
+                if text.startswith('gitdir:'):
+                    target = (parent / text[7:].strip()).resolve()
+                    if target.parent.name == 'worktrees' and target.parent.parent.name == '.git':
+                        root = target.parent.parent.parent
+            except OSError:
+                pass
+            break
+    else:
+        root = cwd
+    try:
+        subpath = str(cwd.relative_to(root))
+        if subpath == '.':
+            subpath = ''
+    except ValueError:
+        subpath = str(cwd)
+    return str(root), subpath
+
+
+def pane_cwd(pane):
+    return str(Path(pane['path']) / pane['subpath'])
+
+
+def incarnation(term):
+    return term.get('address'), term.get('created_ms')
+
+
+def live(term):
+    return term.get('state') == 'live'
+
+
+def foreground(term):
+    fg = term.get('foreground') or {}
+    argv = fg.get('argv') or []
+    names = {Path(str(x)).name for x in argv[:3]}
+    names.add(fg.get('name', ''))
+    if 'sleipnir-hermod' in names and 'launch' in argv:
+        return 'starting'
+    if names & AGENTS:
+        return 'running'
+    if names & SHELLS:
+        return child_program(fg.get('pid')) or 'shell'
+    return 'unknown'
+
+
+def classify(event, process_alive=True):
+    kind = event.get('kind')
+    if kind == 'start':
+        return 'start'
+    if kind == 'end':
+        if event.get('agent') == 'claude' and event.get('reason') in {'prompt_input_exit', 'logout'}:
+            return 'closed'
+        if event.get('agent') == 'copilot' and event.get('reason') == 'user_exit':
+            return 'pending-exit' if process_alive else 'closed'
+    if kind == 'launch-exit':
+        return 'crash' if event.get('returncode', 0) < 0 else 'closed'
+    if kind == 'finished' and event.get('reason') == 'killed':
+        return 'closed'
+    if kind == 'lost' and event.get('reason') == 'signaled':
+        return 'crash'
+    if kind in {'missed', 'disconnect'}:
+        return 'resnapshot'
+    return 'observe'
+
+
+def resume_argv(agent, session, args):
+    if agent not in AGENTS or not SESSION_RE.fullmatch(session or ''):
+        raise ValueError('invalid agent or session')
+    selectors = {'claude': '--resume', 'codex': 'resume', 'copilot': '--resume',
+                 'agy': '--conversation', 'opencode': '--session'}
+    result = [agent, selectors[agent], session, *flat(launch_flags(agent, args))]
+    if agent == 'codex' and '--no-daemon' not in result:
+        result.append('--no-daemon')
+    return result
+
+
+def proc_args(pid):
+    try:
+        return Path(f'/proc/{pid}/cmdline').read_bytes().decode(errors='replace').strip('\0').split('\0')
+    except OSError:
+        return []
+
+
+def agent_argv(agent):
+    pid = os.getppid()
+    for _ in range(20):
+        args = proc_args(pid)
+        try:
+            name = Path(f'/proc/{pid}/comm').read_text().strip()
+            stat = Path(f'/proc/{pid}/stat').read_text()
+            parent = int(stat[stat.rindex(')') + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if name == agent or any(Path(arg).name == agent for arg in args[:3]):
+            return args
+        if parent <= 1 or parent == pid:
+            break
+        pid = parent
+    return []
+
+
+def child_program(pid, depth=0):
+    if not pid or depth > 4:
+        return None
+    args = proc_args(pid)
+    names = {Path(arg).name for arg in args[:3]}
+    try:
+        names.add(Path(f'/proc/{pid}/comm').read_text().strip())
+    except OSError:
+        pass
+    if 'sleipnir-hermod' in names and 'launch' in args:
+        return 'starting'
+    if names & AGENTS:
+        return 'running'
+    try:
+        children = Path(f'/proc/{pid}/task/{pid}/children').read_text().split()
+    except OSError:
+        return None
+    for child in children:
+        result = child_program(child, depth + 1)
+        if result:
+            return result
+    return None
+
+
+def session_held(agent, session):
+    if not session:
+        return False
+    if agent == 'claude':
+        for path in (Path.home() / '.claude/sessions').glob('*.json'):
+            try:
+                data = json.loads(path.read_text())
+                pid = int(data.get('pid', path.stem))
+                if data.get('sessionId', data.get('session_id')) == session and proc_args(pid):
+                    return True
+            except (OSError, ValueError, TypeError):
+                pass
+    for path in Path('/proc').glob('[0-9]*/cmdline'):
+        args = proc_args(path.parent.name)
+        if session in args and any(Path(x).name == agent for x in args[:3]):
+            return True
+    return False
+
+
+def hc(*args, plain=False):
+    env = dict(os.environ)
+    if plain:
+        env.pop('HC_TERMINAL_ID', None)
+        env.pop('HC_SCOPE', None)
+    result = subprocess.run(['hc', *args], env=env, capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError(f'hc {args[0]} failed: {result.stderr.strip()}')
+    return result.stdout
+
+
+def snapshot():
+    result = json.loads(hc('ls', '--all', '--json'))
+    return result if isinstance(result, list) else result.get('terminals', [])
+
+
+def read_app_tabs():
+    session = os.environ.get('HC_SESSION', 'default')
+    state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state')))
+    path = os.environ.get('HC_SOCKET', str(state / 'herdr-core' / session / (session + '.sock')))
+    try:
+        with socket.socket(socket.AF_UNIX) as client:
+            client.settimeout(2)
+            client.connect(path)
+            request = {'jsonrpc': '2.0', 'id': 1, 'method': 'doc.get', 'params': {'name': 'herdr-app'}}
+            client.sendall(json.dumps(request).encode() + b'\n')
+            with client.makefile('rb') as stream:
+                response = json.loads(stream.readline(16 * 1024 * 1024))
+        if 'result' not in response:
+            return None
+        value = response['result'].get('value')
+        if value is None:
+            return set()
+        return {tab['id'] for space in value['spaces'] for tab in space.get('tabs', [])}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def placement(db, term, cwd):
+    labels = term.get('labels') or {}
+    root, subpath = cwd_parts(cwd)
+    space_name, tab_name = parse_where(labels.get('where'))
+    space_id, tab_id = labels.get('herdr.space'), labels.get('herdr.tab')
+    workspace = None
+    if space_id:
+        workspace = db.execute('SELECT * FROM workspace WHERE herdr_space_id=?', (space_id,)).fetchone()
+    if workspace is None:
+        workspace = db.execute('SELECT * FROM workspace WHERE path=?', (root,)).fetchone()
+    if workspace is None:
+        name = space_name or Path(root).name or root
+        if db.execute('SELECT 1 FROM workspace WHERE name=?', (name,)).fetchone():
+            name += ' · ' + ident()[:6]
+        workspace_id = ident()
+        db.execute('INSERT INTO workspace VALUES(?,?,?,?,?,?)',
+                   (workspace_id, name, root, space_id, now(), now()))
+    else:
+        workspace_id = workspace['id']
+        if space_id and workspace['herdr_space_id'] != space_id:
+            db.execute('UPDATE workspace SET herdr_space_id=?,updated_at=? WHERE id=?',
+                       (space_id, now(), workspace_id))
+        root = workspace['path']
+        subpath = os.path.relpath(cwd, root) if Path(cwd).is_relative_to(root) else cwd
+        if subpath == '.':
+            subpath = ''
+    tab = None
+    if tab_id:
+        tab = db.execute('SELECT * FROM tab WHERE herdr_tab_id=? AND workspace_id=?',
+                         (tab_id, workspace_id)).fetchone()
+    if tab is None:
+        logical_tab = ident()
+        db.execute('INSERT INTO tab VALUES(?,?,?,?,?,?)',
+                   (logical_tab, workspace_id, tab_name, tab_id, now(), now()))
+    else:
+        logical_tab = tab['id']
+        db.execute('UPDATE tab SET name=?,updated_at=? WHERE id=?', (tab_name, now(), logical_tab))
+    return logical_tab, subpath
+
+
+def upsert_start(db, term, event):
+    agent, session = event['agent'], event['session_id']
+    if agent not in AGENTS or not SESSION_RE.fullmatch(session or ''):
+        return None
+    address, created = incarnation(term)
+    pane = db.execute('SELECT * FROM pane WHERE herdr_terminal_id=? AND herdr_terminal_created_ms=? '
+                      'ORDER BY updated_at DESC LIMIT 1', (address, created)).fetchone()
+    if event.get('at', now()) < (created or 0):
+        return None
+    if pane is not None and event.get('at', now()) < pane['updated_at']:
+        return pane['id']
+    tab, subpath = placement(db, term, event.get('cwd') or term.get('cwd') or str(Path.home()))
+    duplicate = db.execute("SELECT id FROM pane WHERE agent=? AND session_id=? AND state<>'closed'",
+                           (agent, session)).fetchone()
+    if duplicate is not None and (pane is None or duplicate['id'] != pane['id']):
+        return None
+    labels = term.get('labels') or {}
+    args = flat(launch_flags(agent, event.get('args', [])))
+    if pane is None or pane['state'] == 'closed':
+        pane_id = ident()
+        db.execute('INSERT INTO pane VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                   (pane_id, tab, labels.get('shepherd.pane-name'), agent, session, subpath,
+                    json.dumps(args), 'open', address, created,
+                    int(str(labels.get('herdr.pinned', '')).lower() in {'1', 'true'}), now(), now()))
+    else:
+        pane_id = pane['id']
+        if not args:
+            args = json.loads(pane['launch_args'] or '[]')
+        db.execute('UPDATE pane SET tab_id=?,agent=?,session_id=?,subpath=?,launch_args=?,updated_at=? '
+                   'WHERE id=?', (tab, agent, session, subpath, json.dumps(args), now(), pane_id))
+    return pane_id
+
+
+def migrate_labels(db, terminals):
+    if db.execute('SELECT 1 FROM event LIMIT 1').fetchone() or db.execute('SELECT 1 FROM pane').fetchone():
+        marker = db.execute("SELECT payload FROM event WHERE kind='migration-complete' ORDER BY id LIMIT 1").fetchone()
+        pending = json.loads(marker['payload']).get('labels', []) if marker else []
+        return [term['address'] for term in terminals
+                if list(incarnation(term)) in pending and (term.get('labels') or {}).get('agent-resume')]
+    candidates = {}
+    clear = []
+    for term in terminals:
+        raw = (term.get('labels') or {}).get('agent-resume')
+        if not raw or not live(term):
+            continue
+        try:
+            data = json.loads(raw)
+            if data.get('agent') not in AGENTS or not SESSION_RE.fullmatch(data.get('session', '')):
+                continue
+            key = data['agent'], data['session']
+            clear.append(term['address'])
+            if key not in candidates or data.get('at', 0) > candidates[key][1].get('at', 0):
+                candidates[key] = term, data
+        except (ValueError, TypeError):
+            continue
+    with db:
+        for term, data in candidates.values():
+            event = dict(agent=data['agent'], session_id=data['session'], cwd=data.get('cwd'),
+                         args=data.get('args', []), at=data.get('at', now()))
+            pane = upsert_start(db, term, event)
+            record(db, 'import', pane, {'terminal': term['address']})
+        record(db, 'migration-complete', payload={'labels': [list(incarnation(term)) for term in terminals
+                                                             if term['address'] in clear]})
+    return clear
+
+
+def panes(db):
+    return db.execute('SELECT pane.*,tab.name AS tab_name,tab.herdr_tab_id,workspace.path,'
+                      'workspace.name AS workspace_name,workspace.herdr_space_id,workspace.id AS workspace_id '
+                      'FROM pane JOIN tab ON pane.tab_id=tab.id '
+                      'JOIN workspace ON tab.workspace_id=workspace.id').fetchall()
+
+
+def phase1_plan(pane, terminals, app_tabs=None):
+    if pane['state'] != 'open':
+        return {'action': 'skip'}
+    target = next((term for term in terminals if live(term) and incarnation(term) ==
+                   (pane['herdr_terminal_id'], pane['herdr_terminal_created_ms'])), None)
+    if target:
+        return {'action': 'map', 'terminal': target}
+    if not Path(pane_cwd(pane)).is_dir():
+        return {'action': 'blocked'}
+    known = pane['herdr_tab_id'] and any(
+        (term.get('labels') or {}).get('herdr.tab') == pane['herdr_tab_id']
+        for term in terminals if live(term))
+    if app_tabs is not None:
+        known = pane['herdr_tab_id'] in app_tabs
+    labels = {}
+    if known:
+        labels['herdr.tab'] = pane['herdr_tab_id']
+        if pane['herdr_space_id']:
+            labels['herdr.space'] = pane['herdr_space_id']
+    else:
+        labels['shepherd.space-name'] = pane['workspace_name']
+        if pane['tab_name']:
+            labels['shepherd.tab-name'] = pane['tab_name'] + (
+                ' · ' + pane['name'] if pane['name'] else '')
+    if pane['name']:
+        labels['shepherd.pane-name'] = pane['name']
+    if pane['herdr_pinned']:
+        labels['herdr.pinned'] = 'true'
+    return {'action': 'create', 'labels': labels, 'split': not known, 'cwd': pane_cwd(pane)}
+
+
+def phase2_plan(rows, terminals, active, eligible, held, concurrency=4):
+    available = max(0, concurrency - len(active))
+    result = []
+    for pane in rows:
+        if pane['state'] != 'open' or pane['id'] not in eligible or pane['id'] in active:
+            continue
+        term = next((t for t in terminals if live(t) and incarnation(t) ==
+                     (pane['herdr_terminal_id'], pane['herdr_terminal_created_ms'])), None)
+        if term and foreground(term) == 'shell' and pane['session_id'] and not held(pane['agent'], pane['session_id']):
+            if len(result) < available:
+                result.append(pane['id'])
+    return result
+
+
+def read_hook(agent, event, raw):
+    data = json.loads(raw or '{}')
+    if not isinstance(data, dict):
+        return None
+    if data.get('agent_id') or data.get('agentId') or data.get('subagent_type') or data.get('subagentType'):
+        return None
+    session = (data.get('session_id') or data.get('sessionId') or
+               data.get('conversation_id') or data.get('conversationId'))
+    if agent == 'codex' and os.environ.get('CODEX_THREAD_ID') not in (None, '', session):
+        return None
+    if not SESSION_RE.fullmatch(session or ''):
+        return None
+    terminal = os.environ.get('HC_TERMINAL_ID')
+    if not terminal:
+        return None
+    return {'kind': event, 'agent': agent, 'terminal': terminal, 'session_id': session,
+            'cwd': data.get('cwd') or next(iter(data.get('workspacePaths') or []), None) or os.getcwd(),
+            'reason': data.get('reason'), 'at': now(),
+            'args': flat(launch_flags(agent, agent_argv(agent)))}
+
+
+class Reconciler:
+    def __init__(self, db, directory, core=hc):
+        self.db, self.directory, self.core = db, directory, core
+        self.terminals = []
+        self.app_tabs = None
+        self.eligible = set()
+        self.attempts = {}
+        self.runtime = {}
+        self.pending_exit = {}
+        self.pending_crash = set()
+        self.concurrency = max(1, int(os.environ.get('SLEIPNIR_RECOVERY_CONCURRENCY', '4')))
+
+    def pane_for(self, term):
+        if not term:
+            return None
+        return self.db.execute('SELECT * FROM pane WHERE herdr_terminal_id=? '
+                               "AND herdr_terminal_created_ms=? AND state<>'closed'",
+                               incarnation(term)).fetchone()
+
+    def transition(self, pane, action, payload):
+        pane_id = pane['id']
+        if action == 'closed':
+            self.db.execute("UPDATE pane SET state='closed',updated_at=? WHERE id=?", (now(), pane_id))
+            self.eligible.discard(pane_id)
+            self.attempts.pop(pane_id, None)
+            self.runtime.pop(pane_id, None)
+        if action == 'crash':
+            record(self.db, 'crash', pane_id, payload)
+            count = self.db.execute(
+                "SELECT count(*) FROM event WHERE pane_id=? AND kind='crash' AND at>=? "
+                "AND id>coalesce((SELECT max(id) FROM event WHERE pane_id=? AND kind='retry'),0)",
+                (pane_id, now() - 600000, pane_id)).fetchone()[0]
+            self.attempts.pop(pane_id, None)
+            if count >= 3:
+                self.db.execute("UPDATE pane SET state='blocked',updated_at=? WHERE id=?", (now(), pane_id))
+                self.eligible.discard(pane_id)
+                self.runtime[pane_id] = 'crash-loop'
+            else:
+                self.eligible.add(pane_id)
+                self.runtime.pop(pane_id, None)
+
+    def process_inbox(self):
+        inbox = self.directory / 'inbox'
+        for path in sorted(inbox.glob('*.json')):
+            try:
+                value = json.loads(path.read_text())
+                if self.apply_inbox(value, path.name) is False:
+                    continue
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                print(f'hermod: rejected inbox {path.name}: {type(error).__name__}', file=sys.stderr)
+                with self.db:
+                    if not self.db.execute('SELECT 1 FROM event WHERE source_id=?', (path.name,)).fetchone():
+                        record(self.db, 'invalid-inbox', source=path.name)
+            path.unlink(missing_ok=True)
+
+    def apply_inbox(self, value, source):
+        if not isinstance(value, dict):
+            raise ValueError('inbox event must be an object')
+        if self.db.execute('SELECT 1 FROM event WHERE source_id=?', (source,)).fetchone():
+            return
+        terminal = next((t for t in self.terminals if t['address'] == value.get('terminal') and live(t)), None)
+        pane = self.pane_for(terminal)
+        kind = value.get('kind')
+        if kind == 'start' and terminal is None and now() - value.get('at', 0) < 60000:
+            return False
+        pane_id = value.get('pane_id')
+        with self.db:
+            if kind == 'start' and terminal:
+                pane_id = upsert_start(self.db, terminal, value)
+                attempt = self.attempts.get(pane_id)
+                if attempt and attempt['terminal'] == incarnation(terminal) and attempt['session'] == value['session_id']:
+                    self.attempts.pop(pane_id, None)
+                    self.runtime[pane_id] = 'running'
+                self.eligible.discard(pane_id)
+                self.pending_exit.pop(pane_id, None)
+            elif kind in {'retry', 'close', 'forget'}:
+                pane = self.db.execute('SELECT * FROM pane WHERE id=?', (pane_id,)).fetchone()
+                if pane is None:
+                    pane_id = None
+                else:
+                    self.attempts.pop(pane_id, None)
+                    if kind == 'retry':
+                        self.db.execute("UPDATE pane SET state='open',updated_at=? WHERE id=?", (now(), pane_id))
+                        self.eligible.add(pane_id)
+                        self.runtime.pop(pane_id, None)
+                    else:
+                        self.transition(pane, 'closed', {})
+                        if kind == 'forget':
+                            self.db.execute('UPDATE pane SET session_id=NULL,launch_args=NULL WHERE id=?', (pane_id,))
+            elif pane is not None:
+                pane_id = pane['id']
+                if value.get('session_id') != pane['session_id']:
+                    record(self.db, 'stale-inbox', pane_id, source=source)
+                    return
+                if kind == 'launch-exit':
+                    if value.get('created_ms') != pane['herdr_terminal_created_ms']:
+                        record(self.db, 'stale-inbox', pane_id, source=source)
+                        return
+                action = classify(value)
+                if action == 'pending-exit':
+                    self.pending_exit[pane_id] = value
+                else:
+                    self.transition(pane, action, {'returncode': value.get('returncode')})
+            record(self.db, kind or 'unknown-inbox', pane_id,
+                   {key: value[key] for key in ('agent', 'reason', 'returncode') if key in value}, source)
+
+    def observe(self, event):
+        if event.get('method') == 'event':
+            event = event.get('params') or {}
+        kind = event.get('kind') or event.get('type') or event.get('event')
+        if isinstance(kind, dict):
+            return
+        if kind in {'snapshot', 'missed'}:
+            return
+        data = event.get('data') or {}
+        term = data if kind in {'created', 'restarted'} and isinstance(data, dict) and 'address' in data else event.get('terminal')
+        if not isinstance(term, dict):
+            address = term or event.get('address')
+            term = next((t for t in self.terminals if t['address'] == address), None)
+        pane = self.pane_for(term)
+        if pane is None:
+            return
+        value = dict(event, kind=kind, reason=event.get('reason') or (data.get('reason') if isinstance(data, dict) else None) or term.get('reason'))
+        if kind == 'lost' and value['reason'] == 'signaled':
+            self.pending_crash.add(pane['id'])
+        elif kind == 'restarted' and pane['id'] in self.pending_crash:
+            self.pending_crash.discard(pane['id'])
+            with self.db:
+                self.transition(pane, 'crash', {'reason': 'signaled'})
+        elif kind == 'restarted' and pane['state'] == 'open':
+            self.eligible.add(pane['id'])
+            self.runtime.pop(pane['id'], None)
+        elif classify(value) == 'closed':
+            with self.db:
+                self.transition(pane, 'closed', {'reason': 'killed'})
+                record(self.db, 'closed', pane['id'], {'reason': 'killed'})
+
+    def refresh(self, terminals):
+        self.terminals = terminals
+        for term in terminals:
+            pane = self.pane_for(term)
+            if pane is None:
+                continue
+            labels = term.get('labels') or {}
+            with self.db:
+                if term.get('state') == 'finished' and term.get('reason') == 'killed':
+                    self.transition(pane, 'closed', {})
+                    record(self.db, 'closed', pane['id'], {'reason': 'killed'})
+                    continue
+                old = self.db.execute('SELECT herdr_tab_id FROM tab WHERE id=?', (pane['tab_id'],)).fetchone()[0]
+                if labels.get('herdr.tab') and labels.get('herdr.tab') != old:
+                    row = next(p for p in panes(self.db) if p['id'] == pane['id'])
+                    tab, _ = placement(self.db, term, pane_cwd(row))
+                    self.db.execute('UPDATE pane SET tab_id=?,updated_at=? WHERE id=?', (tab, now(), pane['id']))
+                    record(self.db, 'moved', pane['id'])
+                self.db.execute('UPDATE pane SET name=?,herdr_pinned=? WHERE id=?',
+                                (labels.get('shepherd.pane-name'),
+                                 int(str(labels.get('herdr.pinned', '')).lower() in {'1', 'true'}), pane['id']))
+                if labels.get('herdr.tab'):
+                    _, name = parse_where(labels.get('where'))
+                    self.db.execute('UPDATE tab SET name=? WHERE id=?', (name, pane['tab_id']))
+            if pane['id'] in self.pending_exit and foreground(term) == 'shell' and not session_held(pane['agent'], pane['session_id']):
+                with self.db:
+                    self.transition(pane, 'closed', {})
+                    record(self.db, 'closed', pane['id'], {'reason': 'user_exit'})
+                self.pending_exit.pop(pane['id'], None)
+
+    def phase1(self):
+        for pane in panes(self.db):
+            plan = phase1_plan(pane, self.terminals, self.app_tabs)
+            if plan['action'] == 'blocked':
+                with self.db:
+                    self.db.execute("UPDATE pane SET state='blocked',updated_at=? WHERE id=?", (now(), pane['id']))
+                    record(self.db, 'missing-cwd', pane['id'])
+            if plan['action'] != 'create':
+                continue
+            args = ['run', '--bg', '--keep', '--outlive-parent', '--cwd', plan['cwd']]
+            for key, val in plan['labels'].items():
+                args.extend(['--label', key + '=' + val])
+            term = json.loads(self.core(*args, '--json', plain=True))
+            with self.db:
+                if plan['split']:
+                    tab_id = ident()
+                    self.db.execute('INSERT INTO tab VALUES(?,?,?,?,?,?)',
+                                    (tab_id, pane['workspace_id'], plan['labels'].get('shepherd.tab-name'),
+                                     (term.get('labels') or {}).get('herdr.tab'), now(), now()))
+                    self.db.execute('UPDATE pane SET tab_id=? WHERE id=?', (tab_id, pane['id']))
+                self.db.execute('UPDATE pane SET herdr_terminal_id=?,herdr_terminal_created_ms=?,updated_at=? WHERE id=?',
+                                (*incarnation(term), now(), pane['id']))
+                record(self.db, 'terminal-created', pane['id'])
+            self.terminals.append(term)
+            self.eligible.add(pane['id'])
+
+    def phase2(self):
+        rows = panes(self.db)
+        for pane in rows:
+            term = next((t for t in self.terminals if incarnation(t) ==
+                         (pane['herdr_terminal_id'], pane['herdr_terminal_created_ms'])), None)
+            if not term or pane['state'] != 'open':
+                continue
+            observed = foreground(term)
+            attempt = self.attempts.get(pane['id'])
+            if observed in {'running', 'starting'} and attempt is None:
+                self.eligible.discard(pane['id'])
+                self.runtime[pane['id']] = observed
+                last_launch = self.db.execute("SELECT max(id) FROM event WHERE pane_id=? AND kind='launch'",
+                                              (pane['id'],)).fetchone()[0] or 0
+                last_start = self.db.execute("SELECT max(id) FROM event WHERE pane_id=? AND kind='start'",
+                                             (pane['id'],)).fetchone()[0] or 0
+                if observed == 'starting' or last_launch > last_start:
+                    self.runtime[pane['id']] = 'starting'
+                    self.attempts[pane['id']] = {
+                        'terminal': incarnation(term), 'session': pane['session_id'],
+                        'deadline': time.monotonic() + 60}
+            elif observed == 'shell' and self.runtime.get(pane['id']) == 'running' and not attempt:
+                self.runtime[pane['id']] = 'exited_unknown'
+            if attempt and time.monotonic() >= attempt['deadline']:
+                screen = self.core('read', '--lines', '0', term['address']).lower()
+                state = 'awaiting_user' if any(x in screen for x in ('trust', 'quota', 'sign in', 'login', 'log in')) else 'failed'
+                if pane['agent'] in {'agy', 'opencode'} and observed == 'running' and state != 'awaiting_user':
+                    state = 'running-unconfirmed'
+                self.runtime[pane['id']] = state
+                self.attempts.pop(pane['id'], None)
+                with self.db:
+                    record(self.db, state, pane['id'])
+        selected = phase2_plan(rows, self.terminals, self.attempts, self.eligible,
+                               session_held, self.concurrency)
+        for pane_id in selected:
+            pane = next(p for p in rows if p['id'] == pane_id)
+            if not Path(pane_cwd(pane)).is_dir():
+                with self.db:
+                    self.db.execute("UPDATE pane SET state='blocked' WHERE id=?", (pane_id,))
+                    record(self.db, 'missing-cwd', pane_id)
+                self.eligible.discard(pane_id)
+                continue
+            self.attempts[pane_id] = {'terminal': (pane['herdr_terminal_id'], pane['herdr_terminal_created_ms']),
+                                      'session': pane['session_id'], 'deadline': time.monotonic() + (10 if pane['agent'] in {'agy', 'opencode'} else 60)}
+            self.runtime[pane_id] = 'starting'
+            self.eligible.discard(pane_id)
+            try:
+                self.core('send', pane['herdr_terminal_id'], ' sleipnir-hermod launch ' + pane_id, plain=True)
+            except Exception:
+                self.attempts.pop(pane_id, None)
+                self.runtime[pane_id] = 'failed'
+                raise
+            with self.db:
+                record(self.db, 'launch', pane_id)
+
+    def status(self):
+        data = [dict(pane, runtime=self.runtime.get(pane['id'], pane['state'])) for pane in panes(self.db)]
+        return {'at': now(), 'stale': False, 'panes': data}
+
+
+def event_reader(process, messages):
+    try:
+        for line in process.stdout:
+            try:
+                messages.put(json.loads(line))
+            except ValueError:
+                pass
+    finally:
+        messages.put({'kind': 'disconnect'})
+
+
+def serve(directory):
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (directory / 'hermod.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        db = connect_db(directory)
+        reconciler = Reconciler(db, directory)
+        process = None
+        messages = queue.Queue()
+        delay = 1
+        initialized = False
+        stopping = threading.Event()
+        previous = {sig: signal.signal(sig, lambda signum, frame: stopping.set())
+                    for sig in (signal.SIGTERM, signal.SIGINT)}
+        status_path = directory / 'hermod.sock'
+        status_path.unlink(missing_ok=True)
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(status_path))
+        os.chmod(status_path, 0o600)
+        listener.listen(4)
+        listener.setblocking(False)
+        try:
+            while not stopping.is_set():
+                try:
+                    if process is None or process.poll() is not None:
+                        process = subprocess.Popen(['hc', 'events', '--json'], stdout=subprocess.PIPE,
+                                                   stderr=subprocess.DEVNULL, text=True)
+                        threading.Thread(target=event_reader, args=(process, messages), daemon=True).start()
+                        terminals = snapshot()
+                        clear = migrate_labels(db, terminals)
+                        for address in clear:
+                            hc('label', address, 'agent-resume=')
+                        reconciler.refresh(terminals)
+                        if not initialized:
+                            reconciler.eligible.update(p['id'] for p in panes(db) if p['state'] == 'open')
+                            initialized = True
+                    while True:
+                        try:
+                            event = messages.get_nowait()
+                        except queue.Empty:
+                            break
+                        reconciler.observe(event)
+                    reconciler.refresh(snapshot())
+                    reconciler.process_inbox()
+                    reconciler.app_tabs = read_app_tabs()
+                    reconciler.phase1()
+                    reconciler.phase2()
+                    try:
+                        client, _ = listener.accept()
+                    except BlockingIOError:
+                        pass
+                    else:
+                        with client:
+                            client.settimeout(2)
+                            client.sendall(json.dumps(reconciler.status()).encode())
+                    with db:
+                        db.execute('DELETE FROM event WHERE at<?', (now() - 30 * 86400000,))
+                    delay = 1
+                    stopping.wait(1)
+                except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                    print(f'hermod: {error}', file=sys.stderr)
+                    if process:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                        process = None
+                    stopping.wait(delay)
+                    delay = min(delay * 2, 30)
+        finally:
+            if process:
+                process.terminate()
+                process.wait(timeout=5)
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+            listener.close()
+            status_path.unlink(missing_ok=True)
+            db.close()
+
+
+def launch(directory, pane_id):
+    db = connect_db(directory, readonly=True)
+    pane = next((p for p in panes(db) if p['id'] == pane_id), None)
+    db.close()
+    if pane is None or pane['state'] != 'open' or os.environ.get('HC_TERMINAL_ID') != pane['herdr_terminal_id']:
+        raise ValueError('pane is not open in this terminal')
+    args = resume_argv(pane['agent'], pane['session_id'], json.loads(pane['launch_args'] or '[]'))
+    if session_held(pane['agent'], pane['session_id']):
+        raise ValueError('session is already running')
+    process = subprocess.Popen(args, cwd=pane_cwd(pane))
+    previous = {}
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        handler = (lambda signum, frame: None) if sig == signal.SIGINT else (lambda signum, frame: process.send_signal(signum))
+        previous[sig] = signal.signal(sig, handler)
+    try:
+        code = process.wait()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    enqueue({'kind': 'launch-exit', 'terminal': pane['herdr_terminal_id'],
+             'created_ms': pane['herdr_terminal_created_ms'], 'session_id': pane['session_id'],
+             'returncode': code, 'at': now()}, directory)
+    return max(0, code)
+
+
+def hook_command(agent, event):
+    return f'sleipnir-hermod hook {agent} {event}'
+
+
+def install_hooks(path, agent, events, grouped=True):
+    config = json.loads(path.read_text()) if path.exists() else {}
+    hooks = config.setdefault('hooks', {})
+    if not isinstance(hooks, dict):
+        raise ValueError('hooks must be an object')
+    for name, entries in hooks.items():
+        if not isinstance(entries, list):
+            raise ValueError(f'{name} must be an array')
+        for group in list(entries):
+            if isinstance(group, dict) and isinstance(group.get('hooks'), list):
+                group['hooks'] = [h for h in group['hooks'] if not (
+                    isinstance(h, dict) and 'sleipnir-agent-resume hook ' in h.get('command', ''))]
+                if not group['hooks']:
+                    entries.remove(group)
+    for name, event in events:
+        entries = hooks.setdefault(name, [])
+        command = hook_command(agent, event)
+        if grouped:
+            if any(h.get('command') == command for group in entries if isinstance(group, dict)
+                   for h in group.get('hooks', []) if isinstance(h, dict)):
+                continue
+            entries.append({'hooks': [{'type': 'command', 'command': command, 'timeout': 10}]})
+        else:
+            if any(isinstance(h, dict) and h.get('bash') == command for h in entries):
+                continue
+            entries.append({'type': 'command', 'bash': command, 'timeoutSec': 10})
+            config.setdefault('version', 1)
+    atomic_json(path, config)
+
+
+def codex_supports_end():
+    if not shutil.which('codex'):
+        return False
+    try:
+        with tempfile.TemporaryDirectory(prefix='hermod-codex-') as directory:
+            result = subprocess.run(['codex', 'app-server', 'generate-json-schema', '--out', directory],
+                                    capture_output=True, timeout=20)
+            if result.returncode:
+                return False
+            path = Path(directory) / 'v2/HookStartedNotification.json'
+            schema = json.loads(path.read_text())
+            return 'sessionEnd' in schema['definitions']['HookEventName']['enum']
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return False
+
+
+def install():
+    home = Path.home()
+    codex_events = [('SessionStart', 'start')]
+    if codex_supports_end():
+        codex_events.append(('SessionEnd', 'end'))
+    targets = [(home / '.claude/settings.json', 'claude', [('SessionStart', 'start'), ('SessionEnd', 'end')], True),
+               (Path(os.environ.get('CODEX_HOME', str(home / '.codex'))) / 'hooks.json', 'codex', codex_events, True)]
+    if shutil.which('copilot'):
+        targets.append((home / '.copilot/hooks/sleipnir-hermod.json', 'copilot',
+                        [('sessionStart', 'start'), ('sessionEnd', 'end')], False))
+    if shutil.which('agy'):
+        targets.append((home / '.gemini/config/hooks.json', 'agy', [('SessionStart', 'start')], True))
+    errors = []
+    for path, agent, events, grouped in targets:
+        try:
+            install_hooks(path, agent, events, grouped)
+        except (OSError, ValueError, TypeError) as error:
+            errors.append(f'{agent}: {error}')
+    if shutil.which('opencode'):
+        plugin = home / '.config/opencode/plugins/sleipnir-hermod.js'
+        plugin.parent.mkdir(parents=True, exist_ok=True)
+        plugin.write_text('''export const SleipnirHermod = async () => ({
+  event: async ({ event }) => {
+    if (event.type !== "session.created") return;
+    const info = event.properties?.info;
+    if (!info?.id) return;
+    try {
+      const child = Bun.spawn(["sh", "-c",
+        "sleipnir-hermod hook opencode start"],
+        { stdin: new Blob([JSON.stringify({ session_id: info.id, cwd: info.directory })]),
+          stdout: "ignore", stderr: "ignore" });
+      await child.exited;
+    } catch {}
+  }
+});
+''')
+    if errors:
+        raise RuntimeError('; '.join(errors))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    sub = parser.add_subparsers(dest='command', required=True)
+    for name in ('serve', 'status', 'install'):
+        sub.add_parser(name)
+    hook = sub.add_parser('hook')
+    hook.add_argument('agent', choices=sorted(AGENTS))
+    hook.add_argument('event', choices=('start', 'end'))
+    for name in ('launch', 'retry', 'close', 'forget'):
+        sub.add_parser(name).add_argument('pane_id')
+    args = parser.parse_args()
+    if args.command == 'hook':
+        try:
+            if os.environ.get('SLEIPNIR_ENABLE_HERMOD', '0') == '1':
+                value = read_hook(args.agent, args.event, sys.stdin.read(1024 * 1024))
+                if value:
+                    enqueue(value)
+        except Exception:
+            pass
+        return 0
+    directory = state_dir()
+    if args.command == 'install':
+        install()
+    elif args.command == 'serve':
+        if os.environ.get('SLEIPNIR_ENABLE_HERMOD', '0') == '1':
+            serve(directory)
+    elif args.command == 'launch':
+        return launch(directory, args.pane_id)
+    elif args.command == 'status':
+        try:
+            with socket.socket(socket.AF_UNIX) as client:
+                client.settimeout(5)
+                client.connect(str(directory / 'hermod.sock'))
+                chunks = []
+                while True:
+                    data = client.recv(65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+            value = json.loads(b''.join(chunks))
+        except OSError:
+            db = connect_db(directory, readonly=True)
+            value = {'stale': True, 'panes': [dict(p) for p in panes(db)]}
+            db.close()
+        print(json.dumps(value, ensure_ascii=False, indent=2))
+    else:
+        enqueue({'kind': args.command, 'pane_id': args.pane_id, 'at': now()}, directory)
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
+        print(f'hermod: {error}', file=sys.stderr)
+        sys.exit(1)

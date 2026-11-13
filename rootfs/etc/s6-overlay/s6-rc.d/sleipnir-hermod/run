@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+[ "${SLEIPNIR_ENABLE_HERMOD:-0}" = "1" ] && [ "${SLEIPNIR_ENABLE_HERDR_CORE:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
+cd /home/ubuntu || exit 1
+exec s6-setuidgid ubuntu /usr/local/bin/sleipnir-hermod serve
