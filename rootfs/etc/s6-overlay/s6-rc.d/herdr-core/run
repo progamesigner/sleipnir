@@ -4,6 +4,5 @@ if [ "${SLEIPNIR_ENABLE_HERMOD:-0}" = "1" ]; then
         echo "sleipnir: Hermod hook installation failed" >&2
 fi
 [ "${SLEIPNIR_ENABLE_HERDR_CORE:-1}" = "1" ] || { s6-svc -O . ; exit 0 ; }
-cd /home/ubuntu || exit 1
 exec s6-setuidgid ubuntu s6-notifyoncheck -d -n 0 -w 1000 -c /etc/s6-overlay/s6-rc.d/herdr-core/data/check \
     python3 /etc/s6-overlay/s6-rc.d/herdr-core/data/monitor

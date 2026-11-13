@@ -51,7 +51,7 @@ while not stopping:
             else:
                 fcntl.flock(lock, fcntl.LOCK_UN)
                 if child is None:
-                    child = subprocess.Popen(['/usr/local/bin/herdr-core', 'serve'])
+                    child = subprocess.Popen(['/usr/local/bin/herdr-core', 'serve'], cwd='/home/ubuntu')
                 time.sleep(5)
                 continue
         check = Path(__file__).with_name('check')
