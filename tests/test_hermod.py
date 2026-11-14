@@ -464,5 +464,56 @@ class HermodTest(unittest.TestCase):
         self.assertNotIn(pane['id'], self.r.eligible)
 
 
+    def test_launch_flags_keep_resume_flags_only(self):
+        args = ['--model', 'opus', '--add-dir', 'a', 'b', '-p', 'prompt', '--resume', 'old', '--verbose',
+                '--verbose=yes', '--settings=s.json', '--', '--model', 'later']
+        self.assertEqual(h.launch_flags('claude', args),
+                         [['--model', 'opus'], ['--add-dir', 'a', 'b'], ['--verbose'], ['--settings=s.json']])
+        self.assertEqual(h.launch_flags('codex', ['-m', 'gpt', 'resume', 'id', '--no-daemon']),
+                         [['-m', 'gpt'], ['--no-daemon']])
+        self.assertEqual(h.launch_flags('claude', ['--model']), [])
+
+    def test_prompt_actions(self):
+        self.assertEqual(h.prompt_action('Update available 1 → 2\n› 1. Update now\n2. Skip'), 'update')
+        self.assertEqual(h.prompt_action('Hooks need review\n2. Trust all and continue'), 'trust-hooks')
+        self.assertEqual(h.prompt_action('Do you trust this folder?'), 'user')
+        self.assertIsNone(h.prompt_action('› Ask Codex to do anything'))
+
+    def test_update_prompt_is_accepted_and_agent_restarts(self):
+        pane = self.start()
+        self.r.attempts[pane['id']] = {'terminal': h.incarnation(self.term), 'session': 'session-123', 'deadline': 0}
+        calls = []
+        self.r.core = lambda *a, **k: calls.append(a) or ('Update available\n› 1. Update now' if a[0] == 'read' else '')
+        self.r.phase2()
+        self.assertIn(('keys', 't1', 'enter'), calls)
+        self.assertIn(pane['id'], self.r.updating)
+        self.r.apply_inbox(dict(kind='launch-exit', terminal='t1', created_ms=123, session_id='session-123',
+                                returncode=0, at=h.now()), 'updated.json')
+        self.assertEqual(h.panes(self.db)[0]['state'], 'open')
+        self.assertIn(pane['id'], self.r.eligible)
+        self.assertNotIn(pane['id'], self.r.updating)
+
+    def test_judged_launch_is_not_judged_again(self):
+        pane = self.start()
+        with self.db:
+            h.record(self.db, 'launch', pane['id'])
+            h.record(self.db, 'failed', pane['id'])
+        launcher, (children, args) = self.launcher_tree([])
+        self.term['foreground'] = launcher
+        with children, args:
+            self.r.phase2()
+        self.assertNotIn(pane['id'], self.r.attempts)
+
+    def test_codex_session_start_hook_matches_resume(self):
+        path = self.path / 'codex-hooks.json'
+        path.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [
+            {'type': 'command', 'command': 'sleipnir-hermod hook codex start', 'timeout': 3}]}]}}))
+        h.install_hooks(path, 'codex', [('SessionStart', 'start', 'startup|resume|clear|compact'), ('SessionEnd', 'end')])
+        hooks = json.loads(path.read_text())['hooks']
+        self.assertEqual(len(hooks['SessionStart']), 1)
+        self.assertEqual(hooks['SessionStart'][0]['matcher'], 'startup|resume|clear|compact')
+        self.assertNotIn('matcher', hooks['SessionEnd'][0])
+
+
 if __name__ == '__main__':
     unittest.main()
