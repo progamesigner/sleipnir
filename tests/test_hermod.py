@@ -7,6 +7,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -128,25 +129,6 @@ class HermodTest(unittest.TestCase):
         terms[0]['foreground'] = {'name': 'claude', 'argv': ['claude']}
         self.assertEqual(h.phase2_plan(rows, terms, {}, {'0'}, lambda *_: False), [])
 
-    def test_migration_newest_duplicate_finished_and_clear_after_commit(self):
-        old = dict(agent='claude', session='old-session', cwd=str(self.cwd), at=1000, args=[])
-        one, two, finished = copy.deepcopy(self.term), copy.deepcopy(self.term), copy.deepcopy(self.term)
-        one['labels']['agent-resume'] = json.dumps(old)
-        two.update(address='t2', created_ms=124)
-        two['labels']['agent-resume'] = json.dumps(dict(old, at=2000))
-        finished.update(address='t3', state='finished')
-        finished['labels']['agent-resume'] = json.dumps(dict(old, session='finished-session'))
-        clear = h.migrate_labels(self.db, [one, two, finished])
-        self.assertEqual(clear, ['t1', 't2'])
-        self.assertEqual(h.panes(self.db)[0]['herdr_terminal_id'], 't2')
-        reader = h.connect_db(self.path / 'state', readonly=True)
-        self.assertEqual(len(h.panes(reader)), 1)
-        reader.close()
-        self.assertEqual(h.migrate_labels(self.db, [one, two]), ['t1', 't2'])
-        one['labels'].pop('agent-resume')
-        two['labels'].pop('agent-resume')
-        self.assertEqual(h.migrate_labels(self.db, [one, two]), [])
-
     def test_session_rotation_stale_exit_and_explicit_close(self):
         pane = self.start()
         newer = dict(self.event, session_id='session-new', at=h.now() + 10)
@@ -185,11 +167,10 @@ class HermodTest(unittest.TestCase):
         self.r.observe(dict(kind='finished', reason='killed', terminal=self.term))
         self.assertEqual(h.panes(self.db)[0]['state'], 'closed')
 
-    def test_install_preserves_hook_order_and_removes_old_entries(self):
+    def test_install_preserves_hook_order(self):
         path = self.path / 'hooks.json'
         path.write_text(json.dumps({'hooks': {'SessionStart': [
-            {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'user-first'},
-                                            {'command': 'sleipnir-agent-resume hook codex'}]},
+            {'matcher': 'startup', 'hooks': [{'type': 'command', 'command': 'user-first'}]},
             {'hooks': [{'command': 'user-second'}]}]}}))
         h.install_hooks(path, 'codex', [('SessionStart', 'start'), ('SessionEnd', 'end')])
         first = path.read_text()
@@ -197,7 +178,6 @@ class HermodTest(unittest.TestCase):
         self.assertEqual(path.read_text(), first)
         hooks = json.loads(first)['hooks']
         self.assertEqual(hooks['SessionStart'][0]['hooks'][0]['command'], 'user-first')
-        self.assertEqual(len(hooks['SessionStart'][0]['hooks']), 1)
         self.assertEqual(hooks['SessionStart'][1]['hooks'][0]['command'], 'user-second')
         self.assertNotIn('matcher', hooks['SessionStart'][-1])
         self.assertEqual(h.hook_command('claude', 'start'), 'sleipnir-hermod hook claude start')
@@ -439,6 +419,49 @@ class HermodTest(unittest.TestCase):
             with patch.object(h, 'proc_args', return_value=['claude', '--resume']), \
                     patch.object(h, 'proc_start', return_value='5000'):
                 self.assertTrue(h.session_held('claude', 'session-123'))
+
+
+    def test_prune_removes_old_closed_panes_and_leftovers(self):
+        pane = self.start()
+        old = h.now() - h.RETENTION_MS - 1000
+        with self.db:
+            h.record(self.db, 'old', pane['id'], at=old)
+            h.record(self.db, 'recent', pane['id'])
+        h.prune(self.db, self.path / 'state')
+        self.assertEqual([r['kind'] for r in self.db.execute('SELECT kind FROM event WHERE pane_id=?', (pane['id'],))
+                          if r['kind'] in ('old', 'recent')], ['recent'])
+        self.assertEqual(len(h.panes(self.db)), 1)
+        with self.db:
+            self.db.execute("UPDATE pane SET state='closed',updated_at=?", (old,))
+        inbox = self.path / 'state/inbox'
+        inbox.mkdir(parents=True, exist_ok=True)
+        stale, fresh = inbox / '.tmp-stale', inbox / '.tmp-fresh'
+        stale.write_text('x')
+        fresh.write_text('x')
+        os.utime(stale, (time.time() - 2 * 86400,) * 2)
+        h.prune(self.db, self.path / 'state')
+        for table in ('pane', 'tab', 'workspace'):
+            self.assertEqual(self.db.execute(f'SELECT count(*) FROM {table}').fetchone()[0], 0)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM event WHERE pane_id IS NOT NULL').fetchone()[0], 0)
+        self.assertFalse(stale.exists())
+        self.assertTrue(fresh.exists())
+
+    def test_recent_closed_pane_is_kept(self):
+        self.start()
+        with self.db:
+            self.db.execute("UPDATE pane SET state='closed',updated_at=?", (h.now(),))
+        h.prune(self.db, self.path / 'state')
+        self.assertEqual(len(h.panes(self.db)), 1)
+
+    def test_start_queued_before_current_shell_keeps_pane_eligible(self):
+        pane = self.start()
+        self.r.eligible.add(pane['id'])
+        with patch.object(h, 'program_started_ms', return_value=h.now() + 60000):
+            self.r.apply_inbox(dict(self.event, at=h.now()), 'queued.json')
+        self.assertIn(pane['id'], self.r.eligible)
+        with patch.object(h, 'program_started_ms', return_value=0):
+            self.r.apply_inbox(dict(self.event, at=h.now() + 1000), 'fresh.json')
+        self.assertNotIn(pane['id'], self.r.eligible)
 
 
 if __name__ == '__main__':

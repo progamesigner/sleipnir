@@ -199,6 +199,8 @@ def connect_db(directory, readonly=False):
             db.executescript(SCHEMA)
         elif db.execute('PRAGMA user_version').fetchone()[0] != 1:
             raise ValueError('unsupported Hermod database version')
+        db.execute('CREATE INDEX IF NOT EXISTS event_at ON event(at)')
+        db.execute('CREATE INDEX IF NOT EXISTS event_pane ON event(pane_id)')
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA busy_timeout=5000')
     return db
@@ -366,6 +368,17 @@ def proc_start(pid):
         return None
 
 
+def program_started_ms(term):
+    start = proc_start(term.get('pid'))
+    if start is None:
+        return 0
+    try:
+        boot = next(int(line.split()[1]) for line in open('/proc/stat') if line.startswith('btime '))
+    except (OSError, StopIteration, ValueError):
+        return 0
+    return int((boot + int(start) / os.sysconf('SC_CLK_TCK')) * 1000)
+
+
 def session_held(agent, session):
     if not session:
         return False
@@ -522,37 +535,23 @@ def upsert_start(db, term, event):
     return pane_id
 
 
-def migrate_labels(db, terminals):
-    if db.execute('SELECT 1 FROM event LIMIT 1').fetchone() or db.execute('SELECT 1 FROM pane').fetchone():
-        marker = db.execute("SELECT payload FROM event WHERE kind='migration-complete' ORDER BY id LIMIT 1").fetchone()
-        pending = json.loads(marker['payload']).get('labels', []) if marker else []
-        return [term['address'] for term in terminals
-                if list(incarnation(term)) in pending and (term.get('labels') or {}).get('agent-resume')]
-    candidates = {}
-    clear = []
-    for term in terminals:
-        raw = (term.get('labels') or {}).get('agent-resume')
-        if not raw or not live(term):
-            continue
-        try:
-            data = json.loads(raw)
-            if data.get('agent') not in AGENTS or not SESSION_RE.fullmatch(data.get('session', '')):
-                continue
-            key = data['agent'], data['session']
-            clear.append(term['address'])
-            if key not in candidates or data.get('at', 0) > candidates[key][1].get('at', 0):
-                candidates[key] = term, data
-        except (ValueError, TypeError):
-            continue
+RETENTION_MS = 30 * 86400000
+
+
+def prune(db, directory):
+    cutoff = now() - RETENTION_MS
     with db:
-        for term, data in candidates.values():
-            event = dict(agent=data['agent'], session_id=data['session'], cwd=data.get('cwd'),
-                         args=data.get('args', []), at=data.get('at', now()))
-            pane = upsert_start(db, term, event)
-            record(db, 'import', pane, {'terminal': term['address']})
-        record(db, 'migration-complete', payload={'labels': [list(incarnation(term)) for term in terminals
-                                                             if term['address'] in clear]})
-    return clear
+        db.execute('DELETE FROM event WHERE at<?', (cutoff,))
+        old = "SELECT id FROM pane WHERE state='closed' AND updated_at<?"
+        db.execute(f'DELETE FROM event WHERE pane_id IN ({old})', (cutoff,))
+        db.execute(f'DELETE FROM pane WHERE id IN ({old})', (cutoff,))
+        db.execute('DELETE FROM tab WHERE id NOT IN (SELECT tab_id FROM pane)')
+        db.execute('DELETE FROM workspace WHERE id NOT IN (SELECT workspace_id FROM tab)')
+    # A hook that died mid-write leaves its temporary file behind.
+    for path in (directory / 'inbox').glob('.tmp-*'):
+        with contextlib.suppress(OSError):
+            if time.time() - path.stat().st_mtime > 86400:
+                path.unlink()
 
 
 def panes(db):
@@ -707,12 +706,14 @@ class Reconciler:
         with self.db:
             if kind == 'start' and terminal:
                 pane_id = upsert_start(self.db, terminal, value)
-                attempt = self.attempts.get(pane_id)
-                if attempt and attempt['terminal'] == incarnation(terminal) and attempt['session'] == value['session_id']:
-                    self.attempts.pop(pane_id, None)
-                    self.runtime[pane_id] = 'running'
-                self.eligible.discard(pane_id)
-                self.pending_exit.pop(pane_id, None)
+                # A start queued before the terminal's current program began says nothing about it.
+                if value.get('at', 0) >= program_started_ms(terminal):
+                    attempt = self.attempts.get(pane_id)
+                    if attempt and attempt['terminal'] == incarnation(terminal) and attempt['session'] == value['session_id']:
+                        self.attempts.pop(pane_id, None)
+                        self.runtime[pane_id] = 'running'
+                    self.eligible.discard(pane_id)
+                    self.pending_exit.pop(pane_id, None)
             elif kind in {'retry', 'close', 'forget'}:
                 pane = self.db.execute('SELECT * FROM pane WHERE id=?', (pane_id,)).fetchone()
                 if pane is None:
@@ -917,6 +918,7 @@ def serve(directory):
         messages = queue.Queue()
         delay = 1
         initialized = False
+        next_prune = 0
         stopping = threading.Event()
         previous = {sig: signal.signal(sig, lambda signum, frame: stopping.set())
                     for sig in (signal.SIGTERM, signal.SIGINT)}
@@ -934,11 +936,7 @@ def serve(directory):
                         process = subprocess.Popen(['hc', 'events', '--json'], stdout=subprocess.PIPE,
                                                    stderr=subprocess.DEVNULL, text=True)
                         threading.Thread(target=event_reader, args=(process, messages), daemon=True).start()
-                        terminals = snapshot()
-                        clear = migrate_labels(db, terminals)
-                        for address in clear:
-                            hc('label', address, 'agent-resume=')
-                        reconciler.refresh(terminals)
+                        reconciler.refresh(snapshot())
                         if not initialized:
                             reconciler.eligible.update(p['id'] for p in panes(db) if p['state'] == 'open')
                             initialized = True
@@ -961,8 +959,9 @@ def serve(directory):
                         with client:
                             client.settimeout(2)
                             client.sendall(json.dumps(reconciler.status()).encode())
-                    with db:
-                        db.execute('DELETE FROM event WHERE at<?', (now() - 30 * 86400000,))
+                    if time.monotonic() >= next_prune:
+                        prune(db, directory)
+                        next_prune = time.monotonic() + 3600
                     delay = 1
                     stopping.wait(1)
                 except (OSError, RuntimeError, subprocess.SubprocessError) as error:
@@ -1025,12 +1024,6 @@ def install_hooks(path, agent, events, grouped=True):
     for name, entries in hooks.items():
         if not isinstance(entries, list):
             raise ValueError(f'{name} must be an array')
-        for group in list(entries):
-            if isinstance(group, dict) and isinstance(group.get('hooks'), list):
-                group['hooks'] = [h for h in group['hooks'] if not (
-                    isinstance(h, dict) and 'sleipnir-agent-resume hook ' in h.get('command', ''))]
-                if not group['hooks']:
-                    entries.remove(group)
     for name, event in events:
         entries = hooks.setdefault(name, [])
         command = hook_command(agent, event)
