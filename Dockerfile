@@ -142,7 +142,9 @@ ARG HERDR_VERSION=latest
 
 COPY --from=devcontainers /tmp/devcontainers/features/herdr /tmp/devcontainers/features/herdr
 
-RUN VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
+RUN --mount=type=secret,id=github_token \
+    GITHUB_TOKEN="$(cat /run/secrets/github_token 2>/dev/null || true)" \
+    VERSION="${HERDR_VERSION}" BRIDGE=false bash /tmp/devcontainers/features/herdr/install.sh
 
 FROM installer AS herdr-core
 

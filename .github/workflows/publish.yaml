@@ -61,6 +61,8 @@ jobs:
       with:
         context: .
         build-args: ${{ steps.versions.outputs.build_args }}
+        secrets: |
+          github_token=${{ secrets.GITHUB_TOKEN }}
         platforms: ${{ matrix.platform }}
         labels: ${{ steps.meta.outputs.labels }}
         no-cache-filters: agent-antigravity-cli,agent-claude-code,agent-codex,agent-copilot,agent-opencode
