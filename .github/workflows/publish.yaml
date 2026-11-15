@@ -67,8 +67,8 @@ jobs:
         outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
         provenance: true
         sbom: true
-        cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
-        cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
+        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache-${{ env.PLATFORM_PAIR }}
+        cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache-${{ env.PLATFORM_PAIR }},mode=max,ignore-error=true
     - run: |
         mkdir -p "${{ runner.temp }}/digests"
         digest="${{ steps.build.outputs.digest }}"
