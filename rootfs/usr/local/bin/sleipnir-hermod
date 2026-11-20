@@ -588,6 +588,9 @@ def phase2_plan(rows, terminals, active, eligible, held, concurrency=4):
 
 
 def read_hook(agent, event, raw):
+    # A launcher that restarts its own agents (a job queue) opts the session out of recovery.
+    if os.environ.get('SLEIPNIR_HERMOD_NO_RECOVERY') == '1':
+        return None
     data = json.loads(raw or '{}')
     if not isinstance(data, dict):
         return None
