@@ -269,6 +269,13 @@ class HermodTest(unittest.TestCase):
         with patch.dict(os.environ, {'HC_TERMINAL_ID': 't1', 'CODEX_THREAD_ID': 'parent-session'}):
             self.assertIsNone(h.read_hook('codex', 'start', json.dumps(self.event)))
 
+    def test_no_recovery_opt_out(self):
+        with patch.dict(os.environ, {'HC_TERMINAL_ID': 't1', 'SLEIPNIR_HERMOD_NO_RECOVERY': '1'}):
+            self.assertIsNone(h.read_hook('claude', 'start', json.dumps(self.event)))
+            self.assertIsNone(h.read_hook('claude', 'end', json.dumps(self.event)))
+        with patch.dict(os.environ, {'HC_TERMINAL_ID': 't1', 'SLEIPNIR_HERMOD_NO_RECOVERY': '0'}):
+            self.assertIsNotNone(h.read_hook('claude', 'start', json.dumps(self.event)))
+
     def test_core_readiness_uses_socket_response_without_starting_core(self):
         check = SCRIPT.parents[3] / 'etc/s6-overlay/s6-rc.d/herdr-core/data/check'
         endpoint = self.path / 'core.sock'
