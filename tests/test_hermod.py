@@ -522,5 +522,25 @@ class HermodTest(unittest.TestCase):
         self.assertNotIn('matcher', hooks['SessionEnd'][0])
 
 
+    def test_install_writes_v2_opencode_plugin(self):
+        def which(name):
+            return '/usr/bin/opencode' if name == 'opencode' else None
+
+        with patch.object(h.Path, 'home', return_value=self.path), \
+                patch.object(h.shutil, 'which', side_effect=which), \
+                patch.object(h, 'codex_supports_end', return_value=False), \
+                patch.dict(os.environ, {'CODEX_HOME': str(self.path / '.codex')}):
+            h.install()
+
+        plugin = (self.path / '.config/opencode/plugins/sleipnir-hermod.js').read_text()
+        self.assertIn('import { Plugin } from "@opencode/plugin"', plugin)
+        self.assertIn('export default Plugin.define({', plugin)
+        self.assertIn('id: "sleipnir-hermod"', plugin)
+        self.assertIn('ctx.event.subscribe({', plugin)
+        self.assertIn('types: ["session.created"]', plugin)
+        self.assertIn('session_id: event.data.sessionID', plugin)
+        self.assertIn('cwd: event.location?.directory', plugin)
+
+
 if __name__ == '__main__':
     unittest.main()

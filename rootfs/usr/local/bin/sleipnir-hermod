@@ -1072,6 +1072,44 @@ def codex_supports_end():
         return False
 
 
+def opencode_plugin_source():
+    return '''import { Plugin } from "@opencode/plugin"
+
+export default Plugin.define({
+  id: "sleipnir-hermod",
+  setup(ctx) {
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({
+          types: ["session.created"],
+          signal: controller.signal,
+        })) {
+          if (!event.data?.sessionID) continue
+          try {
+            const child = Bun.spawn(["sleipnir-hermod", "hook", "opencode", "start"], {
+              stdin: new Blob([JSON.stringify({
+                session_id: event.data.sessionID,
+                cwd: event.location?.directory,
+              })]),
+              stdout: "ignore",
+              stderr: "ignore",
+            })
+            await child.exited
+          } catch (error) {
+            console.error("sleipnir-hermod hook failed", error)
+          }
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) console.error("sleipnir-hermod event subscription failed", error)
+      }
+    })()
+    return () => controller.abort()
+  },
+})
+'''
+
+
 def install():
     home = Path.home()
     # Without a matcher Codex does not run SessionStart hooks when a session is resumed.
@@ -1094,21 +1132,7 @@ def install():
     if shutil.which('opencode'):
         plugin = home / '.config/opencode/plugins/sleipnir-hermod.js'
         plugin.parent.mkdir(parents=True, exist_ok=True)
-        plugin.write_text('''export const SleipnirHermod = async () => ({
-  event: async ({ event }) => {
-    if (event.type !== "session.created") return;
-    const info = event.properties?.info;
-    if (!info?.id) return;
-    try {
-      const child = Bun.spawn(["sh", "-c",
-        "sleipnir-hermod hook opencode start"],
-        { stdin: new Blob([JSON.stringify({ session_id: info.id, cwd: info.directory })]),
-          stdout: "ignore", stderr: "ignore" });
-      await child.exited;
-    } catch {}
-  }
-});
-''')
+        plugin.write_text(opencode_plugin_source())
     if errors:
         raise RuntimeError('; '.join(errors))
 
