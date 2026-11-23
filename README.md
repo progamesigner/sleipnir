@@ -9,6 +9,7 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 | `sleipnir-init` | oneshot | always | — |
 | `dotfiles-init` | oneshot | `SLEIPNIR_ENABLE_DOTFILES` (default 0) | dependent agent services do not start |
 | `permissions-init` | oneshot | always | dependent agent services do not start |
+| `gpg-unlock` | oneshot | passphrase files in `/run/secrets/gpg` | that key stays locked; agent services still start |
 | `tailscaled` | longrun | `SLEIPNIR_ENABLE_TAILSCALE` (default 0) | container exits, Kubernetes restarts it |
 | `tailscale-up` | oneshot | `SLEIPNIR_ENABLE_TAILSCALE` | — |
 | `herdr` | longrun | `SLEIPNIR_ENABLE_HERDR` (default 1) | container exits |
@@ -27,6 +28,8 @@ One container image that hosts a whole agent fleet: [Herdr](https://herdr.dev) m
 Every service drops to `ubuntu` with `s6-setuidgid`. Only the s6 supervision tree runs as root, which is s6-overlay's normal arrangement.
 
 `permissions-init` runs after `dotfiles-init` and re-tightens `~/.gnupg` and `~/.ssh` to `0700`, plus the files in them to owner-only. Both are PVC mounts, so they arrive as `0775` with the fsGroup setgid bit, and the CephFS volumes carry a default ACL that grants the group write access on new files whatever the umask is. GnuPG and OpenSSH both refuse a home directory anyone but the owner can reach, so without this step `gpg -k` warns about unsafe permissions and `ssh` rejects `~/.ssh/config`.
+
+`gpg-unlock` runs after `permissions-init` and unlocks GnuPG keys only when passphrase files are present in `/run/secrets/gpg` (override with `SLEIPNIR_GPG_PASSPHRASES`). Each file is named after the keygrip of one key in `~/.gnupg/private-keys-v1.d` (`gpg -K --with-keygrip`) and holds that key's passphrase. The service restarts `gpg-agent` as `ubuntu` with `--allow-preset-passphrase`, checks each passphrase against its key with `PASSWD --verify`, presets the ones that match, and then deletes every passphrase file. A file whose name is not a keygrip, whose key is missing, or whose passphrase is wrong only logs a warning, and that key stays locked. The passphrases then live only in the agent's memory until the agent or the container stops. Mount the directory from a memory-backed `emptyDir` that an init container fills, so no passphrase sits on a volume the main container can read.
 
 `rc-claude` runs with `--no-create-session-in-dir`, so nothing is pre-created in `SLEIPNIR_WORKSPACE`; every session comes from claude.ai/code or the app on demand. Those are auto-named, and the name prefix comes from `--remote-control-session-name-prefix` (`CLAUDE_RC_NAME`) rather than `--name`, which only labels a session the service creates itself. Claude lowercases the prefix and replaces everything but letters and digits with `-`.
 

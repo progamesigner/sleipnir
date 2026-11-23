@@ -1,0 +1,51 @@
+#!/command/with-contenv sh
+
+passphrases=${SLEIPNIR_GPG_PASSPHRASES:-/run/secrets/gpg}
+keys=/home/ubuntu/.gnupg/private-keys-v1.d
+
+[ -n "$(find "${passphrases}" -mindepth 1 -maxdepth 1 -type f 2>/dev/null)" ] || exit 0
+
+trap 'find "${passphrases}" -mindepth 1 -maxdepth 1 -type f -delete' EXIT
+
+export HOME=/home/ubuntu
+
+# A dotfiles step may already have started an agent without preset support.
+s6-setuidgid ubuntu gpgconf --kill gpg-agent
+if ! s6-setuidgid ubuntu gpg-agent --daemon --allow-preset-passphrase > /dev/null ; then
+    echo "sleipnir: could not start gpg-agent, GnuPG keys stay locked" >&2
+    exit 0
+fi
+
+for file in "${passphrases}"/* ; do
+    [ -f "${file}" ] || continue
+
+    name=$(basename "${file}")
+    keygrip=$(printf '%s' "${name}" | tr 'a-f' 'A-F')
+
+    if ! printf '%s' "${keygrip}" | grep -Eqx '[0-9A-F]{40}' ; then
+        echo "sleipnir: ${name} is not a keygrip, skipping it" >&2
+        continue
+    fi
+
+    if [ ! -f "${keys}/${keygrip}.key" ] ; then
+        echo "sleipnir: no GnuPG private key ${keygrip}, skipping it" >&2
+        continue
+    fi
+
+    # Loopback inquiry takes the passphrase without its trailing newline; the last reply is the verdict.
+    verdict=$(tr -d '\n' < "${file}" | s6-setuidgid ubuntu gpg-connect-agent \
+        'OPTION pinentry-mode=loopback' \
+        '/definqfile PASSPHRASE /dev/stdin' \
+        "PASSWD --verify ${keygrip}" \
+        /bye | tail -n 1)
+    if [ "${verdict}" != "OK" ] ; then
+        echo "sleipnir: wrong GnuPG passphrase for ${keygrip}, it stays locked" >&2
+        continue
+    fi
+
+    if s6-setuidgid ubuntu /usr/lib/gnupg/gpg-preset-passphrase --preset "${keygrip}" < "${file}" ; then
+        echo "sleipnir: unlocked GnuPG key ${keygrip}"
+    else
+        echo "sleipnir: could not preset GnuPG passphrase for ${keygrip}" >&2
+    fi
+done
