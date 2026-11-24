@@ -10,8 +10,10 @@ trap 'find "${passphrases}" -mindepth 1 -maxdepth 1 -type f -delete' EXIT
 export HOME=/home/ubuntu
 
 # A dotfiles step may already have started an agent without preset support.
+# A preset passphrase is still dropped max-cache-ttl seconds after it was set (default 7200, agent/cache.c), so the
+# keys would lock again two hours after start; 604800 s keeps them unlocked for seven days.
 s6-setuidgid ubuntu gpgconf --kill gpg-agent
-if ! s6-setuidgid ubuntu gpg-agent --daemon --allow-preset-passphrase > /dev/null ; then
+if ! s6-setuidgid ubuntu gpg-agent --daemon --allow-preset-passphrase --max-cache-ttl 604800 > /dev/null ; then
     echo "sleipnir: could not start gpg-agent, GnuPG keys stay locked" >&2
     exit 0
 fi
