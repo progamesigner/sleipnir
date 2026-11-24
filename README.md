@@ -88,6 +88,8 @@ For a rootful sidecar using `--group=docker`, the image also adds `ubuntu` to th
 
 The daemon data directory `/home/rootless/.local/share/docker` should use a size-limited local `emptyDir`. Do not put Docker's graph data on the shared CephFS workspace or another network filesystem. Losing this volume on pod replacement is intentional: repositories remain on their own volume, while containers, images, and build cache are disposable.
 
+For disposable work, give the pod a scratch volume on local block storage, mounted at the same path in Sleipnir and the Docker sidecar (bind mounts again), and name it with `SLEIPNIR_SCRATCH`, for example `/home/ubuntu/scratch`. A network filesystem such as CephFS is slow at many small files: creating a swag-server worktree took 35.7 s there and deleting it 106.8 s, against 16.3 s and 0.3 s on a ceph-rbd scratch volume. Put throwaway git worktrees and tool caches (uv, pytest, Python bytecode) on it; keep repositories and anything that must survive a pod replacement on the workspace volume. A generic ephemeral volume backed by block storage does not count against the containers' `ephemeral-storage` limits, unlike an `emptyDir` on the node disk.
+
 Run the sidecar with an explicit Unix-only host:
 
 ```yaml
