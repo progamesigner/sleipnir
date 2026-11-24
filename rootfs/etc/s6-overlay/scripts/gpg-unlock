@@ -32,12 +32,12 @@ for file in "${passphrases}"/* ; do
         continue
     fi
 
-    # Loopback inquiry takes the passphrase without its trailing newline; the last reply is the verdict.
-    verdict=$(tr -d '\n' < "${file}" | s6-setuidgid ubuntu gpg-connect-agent \
-        'OPTION pinentry-mode=loopback' \
-        '/definqfile PASSPHRASE /dev/stdin' \
-        "PASSWD --verify ${keygrip}" \
-        /bye | tail -n 1)
+    # The pipe must belong to ubuntu, or reopening /dev/stdin is denied; the last reply is the verdict.
+    verdict=$(s6-setuidgid ubuntu sh -c 'tr -d "\n" | gpg-connect-agent \
+        "OPTION pinentry-mode=loopback" \
+        "/definqfile PASSPHRASE /dev/stdin" \
+        "PASSWD --verify $1" \
+        /bye | tail -n 1' sh "${keygrip}" < "${file}")
     if [ "${verdict}" != "OK" ] ; then
         echo "sleipnir: wrong GnuPG passphrase for ${keygrip}, it stays locked" >&2
         continue
